@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import os
 import time
@@ -1084,6 +1085,107 @@ def log_final_results(mean_results, std_results, train_time, inference_time,
     logger.info("=" * 60 + "\n")
 
 
+def _fmt_param_bool(value):
+    return "true" if bool(value) else "false"
+
+
+def _fmt_param_float(value, decimals):
+    if value is None:
+        return "None"
+    return f"{float(value):.{decimals}f}"
+
+
+def _resolve_csv_path_name(args, conf, effective_extra_loss, use_lcsr_large_batch_lite):
+    if args.fcrs_mode in {'lcsr', 'lcsr_v2', 'lcsr_v3'}:
+        if conf.get('mini_batch', True) and use_lcsr_large_batch_lite:
+            return args.lcsr_batch_local_semantics
+        return "full_batch_precomputed_pair_package"
+    if (
+        conf.get('mini_batch', True)
+        and effective_extra_loss
+        and args.fcrs_extra_mode == 'plain'
+    ):
+        return args.lcsr_batch_local_semantics
+    if args.fcrs_extra_mode == 'weighted':
+        return "weighted_extra_pair_package"
+    return "full_batch_precomputed_pair_package"
+
+
+def _build_lcsr_runs5_param_str(args, conf, effective_positive_loss, effective_extra_loss, use_lcsr_large_batch_lite):
+    csv_path_name = _resolve_csv_path_name(
+        args=args,
+        conf=conf,
+        effective_extra_loss=effective_extra_loss,
+        use_lcsr_large_batch_lite=use_lcsr_large_batch_lite,
+    )
+    positive_quantile = args.lcsr_positive_quantile if effective_positive_loss in {'quantile_hinge', 'saturation_gate'} else None
+    candidate_bank_size = args.lcsr_candidate_bank_size if csv_path_name == 'candidate_bank_v2' else None
+    parts = [
+        f"dataset={args.dataset}",
+        f"seed={args.seed}",
+        f"runs={args.runs}",
+        f"mini_batch={_fmt_param_bool(conf.get('mini_batch', True))}",
+        f"src={args.lcsr_support_source}",
+        f"mode={effective_positive_loss}",
+        f"q={_fmt_param_float(positive_quantile, 2) if positive_quantile is not None else 'None'}",
+        f"lambda={_fmt_param_float(args.fcrs_extra_lambda, 3)}",
+        f"warmup={args.fcrs_extra_warmup}",
+        f"margin={_fmt_param_float(args.lcsr_margin, 2) if args.lcsr_margin is not None else 'None'}",
+        f"rho={_fmt_param_float(args.lcsr_rho, 2) if args.lcsr_rho is not None else 'None'}",
+        f"kmax={args.lcsr_kmax}",
+        f"pool={args.lcsr_candidate_pool_size}",
+        f"bank={candidate_bank_size if candidate_bank_size is not None else 'None'}",
+        f"path={csv_path_name}",
+    ]
+    return "|".join(parts)
+
+
+def _fmt_metric_cell(mean_value, std_value):
+    return f"{float(mean_value):.2f}±{float(std_value):.2f}"
+
+
+def append_lcsr_runs5_csv(args, conf, mean_results, std_results, logger, effective_positive_loss,
+                          effective_extra_loss, use_lcsr_large_batch_lite):
+    required_metrics = ('NMI', 'ARI', 'ACC', 'F1', 'Homo', 'Comp', 'Mod', 'Cond')
+    missing = [name for name in required_metrics if name not in mean_results or name not in std_results]
+    if missing:
+        raise ValueError(
+            "Missing required metrics for CSV append: "
+            + ", ".join(missing)
+            + ". Ensure label_metrics includes Homo/Comp and struct_metrics includes Mod/Cond."
+        )
+
+    csv_path = (
+        Path(args.lcsr_csv_path)
+        if args.lcsr_csv_path is not None
+        else Path(__file__).resolve().parents[2] / "results" / "lcsr_runs5_search.csv"
+    )
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = csv_path.exists()
+    row = [
+        _build_lcsr_runs5_param_str(
+            args=args,
+            conf=conf,
+            effective_positive_loss=effective_positive_loss,
+            effective_extra_loss=effective_extra_loss,
+            use_lcsr_large_batch_lite=use_lcsr_large_batch_lite,
+        ),
+        *[_fmt_metric_cell(mean_results[name], std_results[name]) for name in required_metrics],
+    ]
+    with csv_path.open("a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['param_str', 'NMI', 'ARI', 'ACC', 'F1', 'Homo', 'Comp', 'Mod', 'Cond'])
+        writer.writerow(row)
+    logger.info(f"[LCSR CSV] Appended successful result to {csv_path}")
+
+
+# Keep a clean UTF-8 visible symbol for CSV metric cells even if an older
+# definition above was saved under a legacy code page.
+def _fmt_metric_cell(mean_value, std_value):
+    return f"{float(mean_value):.2f}\u00b1{float(std_value):.2f}"
+
+
 def main():
     parser = argparse.ArgumentParser(description='LCSR for node clustering')
     parser.add_argument('--seed', type=int, default=0,
@@ -1106,6 +1208,8 @@ def main():
                         help='Whether to resume training from last checkpoint')
     parser.add_argument('--runs', type=int, default=5,
                         help='Number of evaluation runs for stability')
+    parser.add_argument('--lcsr-csv-path', type=str, default=None,
+                        help='Optional CSV output path for successful run summaries')
     parser.add_argument('--fcrs-nonedge-diag', action='store_true',
                         help='Run the no-grad FCRS non-edge diagnostic after evaluation')
     parser.add_argument('--fcrs-topks', type=int, nargs='+', default=[1, 5, 10, 20],
@@ -2177,6 +2281,16 @@ def main():
     log_final_results(
         mean_results, std_results, train_time, inference_time,
         avg_clustering_time, avg_metrics_time, logger
+    )
+    append_lcsr_runs5_csv(
+        args=args,
+        conf=conf,
+        mean_results=mean_results,
+        std_results=std_results,
+        logger=logger,
+        effective_positive_loss=effective_positive_loss,
+        effective_extra_loss=effective_extra_loss,
+        use_lcsr_large_batch_lite=use_lcsr_large_batch_lite,
     )
 
     # Additional compact format for easy parsing

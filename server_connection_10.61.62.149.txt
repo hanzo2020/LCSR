@@ -1,0 +1,13 @@
+Server connection note for Codex
+Created: 2026-05-23
+
+Host/IP: 10.61.62.149
+SSH port: 22
+Username: chenbang
+Password: cb990423
+
+Verified login:
+  Remote user: chenbang
+  Remote HOME: /home/chenbang/
+  Main workspace: /home/chenbang/workspace/LCSR/
+

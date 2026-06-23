@@ -272,7 +272,7 @@ def get_logger(filename: str, log_level: int = 1, name: str = None,
     for hdlr in logger.handlers[:]:
         logger.removeHandler(hdlr)
 
-    fh = logging.FileHandler(filename, mode)
+    fh = logging.FileHandler(filename, mode, encoding='utf-8')
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
