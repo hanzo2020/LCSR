@@ -66,30 +66,30 @@ Cora:
   force_full_batch_inference: true
   allow_cpu_fallback: true
   epochs: 200
-  hidden_channels: 128
-  num_layers: 2
+  hidden_channels: 256
+  num_layers: 1
   norm: none
   s: 0.6
   tau: 0.1
   lam: 1.0
   gam: 1.0
   p_fm1: 0.1
-  p_ed1: 0.3
+  p_ed1: 0.0
   p_fm2: 0.4
-  p_ed2: 0.3
-  # Frozen from search top1 trial cora_044
-  # dataset=Cora|seed=0|runs=5|mini_batch=false|src=freq|mode=linear|q=None|lambda=0.030|warmup=0|margin=0.10|rho=0.25|kmax=2|pool=48|bank=None|gnn=gcn|hidden=128|layers=2|epochs=200|p_fm1=0.10|p_ed1=0.30|p_fm2=0.40|p_ed2=0.30|path=full_batch_precomputed_pair_package
-  fcrs_extra_lambda: 0.03
+  p_ed2: 0.0
+  # Frozen from search top1 trial cora_084
+  # dataset=Cora|seed=0|runs=5|mini_batch=false|src=freq|mode=linear|q=None|lambda=0.050|warmup=0|margin=0.05|rho=0.15|kmax=5|pool=16|bank=None|gnn=gcn|hidden=256|layers=1|epochs=200|p_fm1=0.10|p_ed1=0.00|p_fm2=0.40|p_ed2=0.00|path=full_batch_precomputed_pair_package
+  fcrs_extra_lambda: 0.05
   fcrs_extra_warmup: 0
   fcrs_extra_k: 1
   lcsr_support_source: freq
   lcsr_positive_mode: linear
   lcsr_positive_quantile: null
   lcsr_positive_margin: null
-  lcsr_margin: 0.1
-  lcsr_rho: 0.25
-  lcsr_kmax: 2
-  lcsr_candidate_pool_size: 48
+  lcsr_margin: 0.05
+  lcsr_rho: 0.15
+  lcsr_kmax: 5
+  lcsr_candidate_pool_size: 16
   lcsr_use_gate: false
   lcsr_force_batch_local: false
   lcsr_v3_variant: degree_shrink
@@ -102,7 +102,7 @@ Photo:
   gnn_type: gcn
   force_full_batch_inference: true
   allow_cpu_fallback: true
-  epochs: 200
+  epochs: 300
   hidden_channels: 64
   num_layers: 2
   norm: none
@@ -110,22 +110,23 @@ Photo:
   tau: 0.1
   lam: 1.0
   gam: 1.0
-  p_fm1: 0.0
+  p_fm1: 0.2
   p_ed1: 0.8
-  p_fm2: 0.0
-  p_ed2: 0.8
-  # Frozen from results/final/lcsr_cora_photo_arxiv_lcsr_param_search_report.md
-  # Selected preset: photo_q10_rho25_k4_p16_lam003
-  fcrs_extra_lambda: 0.003
-  fcrs_extra_warmup: 25
+  p_fm2: 0.4
+  p_ed2: 0.1
+  # Frozen from search top1 trial photo_090
+  # dataset=Photo|seed=0|runs=5|mini_batch=false|src=mu|mode=quantile_hinge|q=0.30|lambda=0.002|warmup=75|margin=0.10|rho=0.10|kmax=6|pool=12|bank=None|gnn=gcn|hidden=64|layers=2|epochs=300|p_fm1=0.20|p_ed1=0.80|p_fm2=0.40|p_ed2=0.10|path=full_batch_precomputed_pair_package
+  fcrs_extra_lambda: 0.002
+  fcrs_extra_warmup: 75
   fcrs_extra_k: 1
   lcsr_support_source: mu
   lcsr_positive_mode: quantile_hinge
-  lcsr_positive_quantile: 0.1
+  lcsr_positive_quantile: 0.3
   lcsr_positive_margin: null
-  lcsr_rho: 0.25
-  lcsr_kmax: 4
-  lcsr_candidate_pool_size: 16
+  lcsr_margin: 0.1
+  lcsr_rho: 0.1
+  lcsr_kmax: 6
+  lcsr_candidate_pool_size: 12
   lcsr_use_gate: false
   lcsr_force_batch_local: false
   lcsr_v3_variant: degree_shrink
