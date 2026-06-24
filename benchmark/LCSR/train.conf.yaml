@@ -6,6 +6,10 @@ default:
   save_every: null
   save_every_batch: null
   mini_batch: false
+  # mini_batch=false: num_layers mainly controls the backbone GNN depth.
+  # mini_batch=true: num_layers also controls NeighborLoader sampling depth,
+  # so batch-local semantic-frequency / k-hop style signals may be truncated
+  # if num_layers is smaller than the intended filter_k / num_hops.
   label_metrics:
   - NMI
   - ARI
@@ -62,29 +66,30 @@ Cora:
   force_full_batch_inference: true
   allow_cpu_fallback: true
   epochs: 200
-  hidden_channels: 64
+  hidden_channels: 128
   num_layers: 2
   norm: none
   s: 0.6
   tau: 0.1
   lam: 1.0
   gam: 1.0
-  p_fm1: 0.2
+  p_fm1: 0.1
   p_ed1: 0.3
-  p_fm2: 0.2
+  p_fm2: 0.4
   p_ed2: 0.3
-  # Frozen from results/final/lcsr_cora_photo_arxiv_lcsr_param_search_report.md
-  # Selected preset: cora_rho20_k3_p32_lam020
-  fcrs_extra_lambda: 0.02
-  fcrs_extra_warmup: 50
+  # Frozen from search top1 trial cora_044
+  # dataset=Cora|seed=0|runs=5|mini_batch=false|src=freq|mode=linear|q=None|lambda=0.030|warmup=0|margin=0.10|rho=0.25|kmax=2|pool=48|bank=None|gnn=gcn|hidden=128|layers=2|epochs=200|p_fm1=0.10|p_ed1=0.30|p_fm2=0.40|p_ed2=0.30|path=full_batch_precomputed_pair_package
+  fcrs_extra_lambda: 0.03
+  fcrs_extra_warmup: 0
   fcrs_extra_k: 1
   lcsr_support_source: freq
   lcsr_positive_mode: linear
   lcsr_positive_quantile: null
   lcsr_positive_margin: null
-  lcsr_rho: 0.2
-  lcsr_kmax: 3
-  lcsr_candidate_pool_size: 32
+  lcsr_margin: 0.1
+  lcsr_rho: 0.25
+  lcsr_kmax: 2
+  lcsr_candidate_pool_size: 48
   lcsr_use_gate: false
   lcsr_force_batch_local: false
   lcsr_v3_variant: degree_shrink

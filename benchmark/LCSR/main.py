@@ -1135,6 +1135,14 @@ def _build_lcsr_runs5_param_str(args, conf, effective_positive_loss, effective_e
         f"kmax={args.lcsr_kmax}",
         f"pool={args.lcsr_candidate_pool_size}",
         f"bank={candidate_bank_size if candidate_bank_size is not None else 'None'}",
+        f"gnn={conf.get('gnn_type', 'sage')}",
+        f"hidden={conf.get('hidden_channels', 'None')}",
+        f"layers={conf.get('num_layers', 'None')}",
+        f"epochs={conf.get('epochs', 'None')}",
+        f"p_fm1={_fmt_param_float(conf.get('p_fm1', None), 2) if conf.get('p_fm1', None) is not None else 'None'}",
+        f"p_ed1={_fmt_param_float(conf.get('p_ed1', None), 2) if conf.get('p_ed1', None) is not None else 'None'}",
+        f"p_fm2={_fmt_param_float(conf.get('p_fm2', None), 2) if conf.get('p_fm2', None) is not None else 'None'}",
+        f"p_ed2={_fmt_param_float(conf.get('p_ed2', None), 2) if conf.get('p_ed2', None) is not None else 'None'}",
         f"path={csv_path_name}",
     ]
     return "|".join(parts)
@@ -1198,6 +1206,23 @@ def main():
                         choices=['Cora', 'Photo', 'Physics', 'HM', 'Flickr',
                                  'ArXiv', 'Reddit', 'MAG', 'Pokec', 'Products', 'WebTopic', 'Papers100M'],
                         help='Dataset name')
+    parser.add_argument('--gnn_type', type=str, default=None,
+                        choices=['gcn', 'sage', 'graphsage', 'gat', 'gatv2', 'gin', 'pna', 'edgecnn'],
+                        help='Optional override for the encoder backbone type')
+    parser.add_argument('--hidden_channels', type=int, default=None,
+                        help='Optional override for encoder hidden width')
+    parser.add_argument('--num_layers', type=int, default=None,
+                        help='Optional override for encoder depth')
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Optional override for the number of training epochs')
+    parser.add_argument('--p_fm1', type=float, default=None,
+                        help='Optional override for feature masking probability of view 1')
+    parser.add_argument('--p_ed1', type=float, default=None,
+                        help='Optional override for edge dropping probability of view 1')
+    parser.add_argument('--p_fm2', type=float, default=None,
+                        help='Optional override for feature masking probability of view 2')
+    parser.add_argument('--p_ed2', type=float, default=None,
+                        help='Optional override for edge dropping probability of view 2')
     parser.add_argument('--log_dir', type=str, default='logs',
                         help='Directory to save logs')
     parser.add_argument('--ckpt_dir', type=str, default='ckpts',
