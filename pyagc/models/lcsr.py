@@ -117,6 +117,10 @@ class LCSR(NS4GC):
         self.fcrs_global_degree = None
         self.fcrs_candidate_bank = None
         self.fcrs_candidate_bank_meta = {}
+        self.fcrs_route_audit_meta = {}
+        self.fcrs_route_audit_rows = []
+        self.fcrs_descriptor_audit_rows = []
+        self.fcrs_descriptor_audit_limit = 5
 
     def _runtime_sync(self, device: torch.device | None = None):
         if device is None:
@@ -1249,6 +1253,7 @@ class LCSR(NS4GC):
         anchor_local = torch.arange(batch_size, device=device, dtype=torch.long).unsqueeze(1).expand_as(candidate_local)
         valid_candidate_mask = (candidate_local >= 0) & (candidate_local != anchor_local)
         candidate_count_per_anchor = valid_candidate_mask.sum(dim=1).to(torch.long)
+        post_bank_valid_count_per_anchor = candidate_count_per_anchor
         if profile_active and t_filter is not None:
             self._runtime_profile_add("lcsr_candidate_filtering_s", self._runtime_now(profile_device) - t_filter)
 
@@ -1275,6 +1280,8 @@ class LCSR(NS4GC):
         top_candidate_local = torch.gather(candidate_local, 1, top_candidate_pos)
         top_candidate_global = torch.gather(bank_global, 1, top_candidate_pos)
         top_candidate_valid = torch.isfinite(top_candidate_scores) & (top_candidate_local >= 0)
+        post_pool_count_per_anchor = top_candidate_valid.sum(dim=1).to(torch.long)
+        self.fcrs_route_audit_meta["online_score_shape"] = [int(batch_size), int(bank_width)]
         if profile_active and t_score is not None:
             self._runtime_profile_add("lcsr_candidate_generation_scoring_s", self._runtime_now(profile_device) - t_score)
 
@@ -1435,7 +1442,7 @@ class LCSR(NS4GC):
             admitted_count_per_anchor = torch.zeros(batch_size, dtype=torch.long, device=device)
             if self._admission_audit_enabled_for_batch(getattr(self, "_current_epoch_for_audit", None)):
                 fraction_by_count = {str(i): float((admitted_count_per_anchor == i).float().mean().item()) for i in range(kmax + 1)}
-                self.fcrs_admission_audit_rows.append({
+                audit_row = {
                     "batch_index": len(self.fcrs_admission_audit_rows) + 1,
                     "epoch": int(getattr(self, "_current_epoch_for_audit", -1)),
                     "batch_size": int(batch_size),
@@ -1448,7 +1455,24 @@ class LCSR(NS4GC):
                     "threshold_type": "pairwise_margin_gate",
                     "threshold_value": margin,
                     "admitted_scores": [],
-                })
+                    "pre_bank_candidate_count": int(bank_width),
+                    "post_bank_valid_candidate_count_mean": float(post_bank_valid_count_per_anchor.float().mean().item()),
+                    "post_pool_candidate_count_mean": float(post_pool_count_per_anchor.float().mean().item()),
+                    "post_margin_candidate_count_mean": float(post_margin_count_per_anchor.float().mean().item()),
+                    "post_budget_admitted_count_mean": 0.0,
+                    "extra_pairs_per_batch": 0.0,
+                    "zero_admission_ratio": 1.0,
+                    "mean_dynamic_budget": float(node_budget.float().mean().item()),
+                    "budget_degree_source": "global" if self.fcrs_global_degree is not None else "batch_local",
+                    "candidate_bank_cache_hit": bool(self.fcrs_candidate_bank_meta.get("cache_hit", False)),
+                    "candidate_bank_shape": [int(self.fcrs_candidate_bank.size(0)), int(self.fcrs_candidate_bank.size(1))],
+                    "online_score_shape": [int(batch_size), int(bank_width)],
+                    "post_margin_global_pairs": [],
+                    "admitted_global_pairs": [],
+                }
+                self.fcrs_admission_audit_rows.append(audit_row)
+                if len(self.fcrs_route_audit_rows) < 5:
+                    self.fcrs_route_audit_rows.append(dict(audit_row))
             if profile_active and t_gate is not None:
                 self._runtime_profile_add("lcsr_margin_gate_s", self._runtime_now(profile_device) - t_gate)
                 self.fcrs_runtime_profile_meta["candidate_score_tensor_shape"] = [int(batch_size), int(bank_width)]
@@ -1522,7 +1546,11 @@ class LCSR(NS4GC):
                 admitted_scores_t = flat_r_add.detach().float().cpu()
                 for q in [0.0, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0]:
                     score_quantiles[f"q{int(q*100):02d}"] = float(torch.quantile(admitted_scores_t, q).item())
-            self.fcrs_admission_audit_rows.append({
+            seed_global = seed_global_cpu.to(device=device, dtype=torch.long)
+            margin_anchor_global = seed_global.unsqueeze(1).expand_as(add_global_rank)[margin_pass]
+            margin_peer_global = add_global_rank[margin_pass]
+            admitted_anchor_global = seed_global[flat_anchor]
+            audit_row = {
                 "batch_index": len(self.fcrs_admission_audit_rows) + 1,
                 "epoch": int(getattr(self, "_current_epoch_for_audit", -1)),
                 "batch_size": int(batch_size),
@@ -1535,7 +1563,47 @@ class LCSR(NS4GC):
                 "threshold_type": "pairwise_margin_gate",
                 "threshold_value": margin,
                 "admitted_scores": flat_r_add.detach().cpu().tolist(),
-            })
+                "pre_bank_candidate_count": int(bank_width),
+                "post_bank_valid_candidate_count_mean": float(post_bank_valid_count_per_anchor.float().mean().item()),
+                "post_pool_candidate_count_mean": float(post_pool_count_per_anchor.float().mean().item()),
+                "post_margin_candidate_count_mean": float(post_margin_count_per_anchor.float().mean().item()),
+                "post_budget_admitted_count_mean": float(admitted_count_per_anchor.float().mean().item()),
+                "extra_pairs_per_batch": float(admitted_total),
+                "zero_admission_ratio": float((admitted_count_per_anchor == 0).float().mean().item()),
+                "mean_dynamic_budget": float(node_budget.float().mean().item()),
+                "budget_degree_source": "global" if self.fcrs_global_degree is not None else "batch_local",
+                "candidate_bank_cache_hit": bool(self.fcrs_candidate_bank_meta.get("cache_hit", False)),
+                "candidate_bank_shape": [int(self.fcrs_candidate_bank.size(0)), int(self.fcrs_candidate_bank.size(1))],
+                "online_score_shape": [int(batch_size), int(bank_width)],
+                "post_margin_global_pairs": list(zip(
+                    margin_anchor_global.detach().cpu().tolist(),
+                    margin_peer_global.detach().cpu().tolist(),
+                )),
+                "admitted_global_pairs": list(zip(
+                    admitted_anchor_global.detach().cpu().tolist(),
+                    flat_add_global.detach().cpu().tolist(),
+                )),
+            }
+            self.fcrs_admission_audit_rows.append(audit_row)
+            if len(self.fcrs_route_audit_rows) < 5:
+                self.fcrs_route_audit_rows.append(dict(audit_row))
+            if self.logger is not None:
+                self.logger.info(
+                    "PHYSICS_ADMISSION_AUDIT "
+                    f"batch_index={audit_row['batch_index']} "
+                    f"pre_bank_candidate_count={audit_row['pre_bank_candidate_count']} "
+                    f"post_bank_valid_candidate_count_mean={audit_row['post_bank_valid_candidate_count_mean']:.6f} "
+                    f"post_pool_candidate_count_mean={audit_row['post_pool_candidate_count_mean']:.6f} "
+                    f"post_margin_candidate_count_mean={audit_row['post_margin_candidate_count_mean']:.6f} "
+                    f"post_budget_admitted_count_mean={audit_row['post_budget_admitted_count_mean']:.6f} "
+                    f"extra_pairs_per_batch={audit_row['extra_pairs_per_batch']:.2f} "
+                    f"zero_admission_ratio={audit_row['zero_admission_ratio']:.6f} "
+                    f"mean_dynamic_budget={audit_row['mean_dynamic_budget']:.6f} "
+                    f"budget_degree_source={audit_row['budget_degree_source']} "
+                    f"candidate_bank_cache_hit={int(audit_row['candidate_bank_cache_hit'])} "
+                    f"candidate_bank_shape={audit_row['candidate_bank_shape']} "
+                    f"online_score_shape={audit_row['online_score_shape']}"
+                )
 
         return pair_index, None, {
             "extra_pairs": float(admitted_total),
@@ -1552,13 +1620,31 @@ class LCSR(NS4GC):
         }
 
     @torch.no_grad()
+    def _pair_cosine_scores_chunked(self, left_repr: Tensor, right_repr: Tensor, left_index: Tensor, right_index: Tensor) -> Tensor:
+        total_pairs = int(left_index.numel())
+        if total_pairs == 0:
+            return torch.empty((0,), dtype=left_repr.dtype, device=left_repr.device)
+        feat_dim = int(left_repr.size(-1))
+        bytes_per_value = max(int(left_repr.element_size()), 4)
+        target_bytes = 512 * 1024 * 1024
+        estimated_pair_bytes = max(feat_dim * bytes_per_value * 3, 1)
+        chunk_size = max(1024, min(total_pairs, target_bytes // estimated_pair_bytes))
+        if chunk_size >= total_pairs:
+            return (left_repr[left_index] * right_repr[right_index]).sum(dim=-1)
+        outputs = []
+        for start in range(0, total_pairs, chunk_size):
+            end = min(start + chunk_size, total_pairs)
+            outputs.append((left_repr[left_index[start:end]] * right_repr[right_index[start:end]]).sum(dim=-1))
+        return torch.cat(outputs, dim=0)
+
+    @torch.no_grad()
     def _batch_pair_scores_by_source(self, support_source: str, left_index: Tensor, right_index: Tensor, reps: dict[str, Tensor]) -> Tensor:
-        raw = map_cosine_to_unit_interval((reps["id"][left_index] * reps["id"][right_index]).sum(dim=-1))
+        raw = map_cosine_to_unit_interval(self._pair_cosine_scores_chunked(reps["id"], reps["id"], left_index, right_index))
         if support_source == "raw":
             return raw
-        low = map_cosine_to_unit_interval((reps["low"][left_index] * reps["low"][right_index]).sum(dim=-1))
-        mid = map_cosine_to_unit_interval((reps["mid"][left_index] * reps["mid"][right_index]).sum(dim=-1))
-        high = map_cosine_to_unit_interval((reps["high"][left_index] * reps["high"][right_index]).sum(dim=-1))
+        low = map_cosine_to_unit_interval(self._pair_cosine_scores_chunked(reps["low"], reps["low"], left_index, right_index))
+        mid = map_cosine_to_unit_interval(self._pair_cosine_scores_chunked(reps["mid"], reps["mid"], left_index, right_index))
+        high = map_cosine_to_unit_interval(self._pair_cosine_scores_chunked(reps["high"], reps["high"], left_index, right_index))
         mu = (raw + low + mid + high) * 0.25
         if support_source == "mu":
             return mu
@@ -1600,6 +1686,40 @@ class LCSR(NS4GC):
             device=batch_input.device,
         )
         x1, xk = self._propagate_k(batch_input, norm_adj, num_hops=self.fcrs_filter_k)
+        if len(self.fcrs_descriptor_audit_rows) < self.fcrs_descriptor_audit_limit:
+            seed_slice = slice(0, batch_size)
+            id_norm = batch_input[seed_slice].norm(p=2, dim=-1)
+            low_raw = xk[seed_slice]
+            mid_raw = (x1 - xk)[seed_slice]
+            high_raw = (batch_input - x1)[seed_slice]
+            descriptor_row = {
+                "batch_index": len(self.fcrs_descriptor_audit_rows) + 1,
+                "batch_size": int(batch_size),
+                "filter_k": int(self.fcrs_filter_k),
+                "num_layers_hint": int(getattr(getattr(self, "encoder", None), "num_layers", 0) or 0),
+                "identity_l2_norm_mean": float(id_norm.mean().item()) if id_norm.numel() > 0 else 0.0,
+                "low_l2_norm_mean": float(low_raw.norm(p=2, dim=-1).mean().item()) if low_raw.numel() > 0 else 0.0,
+                "mid_l2_norm_mean": float(mid_raw.norm(p=2, dim=-1).mean().item()) if mid_raw.numel() > 0 else 0.0,
+                "high_l2_norm_mean": float(high_raw.norm(p=2, dim=-1).mean().item()) if high_raw.numel() > 0 else 0.0,
+            }
+            self.fcrs_descriptor_audit_rows.append(descriptor_row)
+            if self.logger is not None:
+                self.logger.info(
+                    "PHYSICS_DESCRIPTOR_AUDIT "
+                    f"batch_index={descriptor_row['batch_index']} "
+                    f"filter_k={descriptor_row['filter_k']} "
+                    f"identity_norm_mean={descriptor_row['identity_l2_norm_mean']:.6f} "
+                    f"low_norm_mean={descriptor_row['low_l2_norm_mean']:.6f} "
+                    f"mid_norm_mean={descriptor_row['mid_l2_norm_mean']:.6f} "
+                    f"high_norm_mean={descriptor_row['high_l2_norm_mean']:.6f}"
+                )
+                if int(self.fcrs_filter_k) == 1 and descriptor_row["mid_l2_norm_mean"] <= 1e-6:
+                    self.logger.warning("Frequency response warning: filter_k=1 makes the mid response nearly zero.")
+                num_layers_hint = descriptor_row["num_layers_hint"]
+                if num_layers_hint > 0 and int(self.fcrs_filter_k) > num_layers_hint:
+                    self.logger.warning(
+                        "Frequency response warning: filter_k > num_layers. NeighborLoader sampling depth may truncate the intended response."
+                    )
         reps = {
             "id": F.normalize(batch_input, p=2, dim=-1),
             "low": F.normalize(xk, p=2, dim=-1),
@@ -1861,12 +1981,16 @@ class LCSR(NS4GC):
         }
         if self.fcrs_extra_loss:
             components['extra'] = loss_extra.detach()
+            components['positive_loss'] = loss_extra.detach()
             components['extra_sim'] = extra_sim.detach()
             components['extra_ratio'] = extra_ratio.detach()
             components['effective_extra_lambda'] = float(effective_extra_lambda)
             components['active_pair_ratio'] = active_pair_ratio.detach()
             components['positive_margin_value'] = positive_margin_value.detach()
             components['saturation_gamma'] = saturation_gamma.detach()
+            extra_pair_count = float(extra_pair_index.size(1)) if extra_pair_index is not None else 0.0
+            components['extra_pair_count'] = extra_pair_count
+            components['active_flag'] = float(effective_extra_lambda > 0 and extra_pair_count > 0)
         return LossOutput(total=loss, components=components)
 
     def loss_batch(self, batch: Data, current_epoch: int | None = None) -> LossOutput:
@@ -1951,6 +2075,7 @@ class LCSR(NS4GC):
         }
         if self.fcrs_extra_loss:
             components['extra'] = loss_extra.detach()
+            components['positive_loss'] = loss_extra.detach()
             components['extra_sim'] = extra_sim.detach()
             components['extra_ratio'] = extra_ratio.detach()
             components['effective_extra_lambda'] = float(effective_extra_lambda)
@@ -1958,6 +2083,8 @@ class LCSR(NS4GC):
             components['positive_margin_value'] = positive_margin_value.detach()
             components['saturation_gamma'] = saturation_gamma.detach()
             components['extra_pairs'] = batch_local_stats['extra_pairs']
+            components['extra_pair_count'] = batch_local_stats['extra_pairs']
+            components['active_flag'] = float(effective_extra_lambda > 0 and batch_local_stats['extra_pairs'] > 0)
             components['admit_score'] = batch_local_stats['admit_score']
             components['gap_raw'] = batch_local_stats['gap_raw']
             components['gap_freq'] = batch_local_stats['gap_freq']

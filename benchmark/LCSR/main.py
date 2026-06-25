@@ -73,6 +73,19 @@ def train_full_batch(model, data, optimizer, conf, logger, device, ckpt_manager=
         epoch_times.append(epoch_time)
         if getattr(model, 'last_epoch_loss_stats', None) is not None:
             epoch_stats.append(model.last_epoch_loss_stats)
+            components = model.last_epoch_loss_stats.get('components', {})
+            effective_extra_lambda = float(components.get('effective_extra_lambda', 0.0))
+            positive_loss = float(components.get('positive_loss', components.get('extra', 0.0)))
+            extra_pair_count = float(components.get('extra_pair_count', components.get('extra_pairs', 0.0)))
+            active_flag = bool(effective_extra_lambda > 0 and extra_pair_count > 0)
+            logger.info(
+                "LCSR_EPOCH_AUDIT "
+                f"epoch={epoch} "
+                f"effective_extra_lambda={effective_extra_lambda:.6f} "
+                f"positive_loss={positive_loss:.6f} "
+                f"extra_pair_count={extra_pair_count:.2f} "
+                f"active_flag={int(active_flag)}"
+            )
 
         # Determine if this is the best model
         is_best = loss < best_loss
@@ -200,6 +213,19 @@ def train_mini_batch(model, data, optimizer, conf, logger, device,
             epoch_times.append(epoch_time)
             if getattr(model, 'last_epoch_loss_stats', None) is not None:
                 epoch_stats.append(model.last_epoch_loss_stats)
+                components = model.last_epoch_loss_stats.get('components', {})
+                effective_extra_lambda = float(components.get('effective_extra_lambda', 0.0))
+                positive_loss = float(components.get('positive_loss', components.get('extra', 0.0)))
+                extra_pair_count = float(components.get('extra_pair_count', components.get('extra_pairs', 0.0)))
+                active_flag = bool(effective_extra_lambda > 0 and extra_pair_count > 0)
+                logger.info(
+                    "LCSR_EPOCH_AUDIT "
+                    f"epoch={epoch} "
+                    f"effective_extra_lambda={effective_extra_lambda:.6f} "
+                    f"positive_loss={positive_loss:.6f} "
+                    f"extra_pair_count={extra_pair_count:.2f} "
+                    f"active_flag={int(active_flag)}"
+                )
 
             # Determine if this is the best model
             is_best = avg_loss < best_loss
@@ -317,6 +343,19 @@ def train_mini_batch(model, data, optimizer, conf, logger, device,
                     name: value / num_batches for name, value in components_sum.items()
                 },
             })
+            components = epoch_stats[-1].get('components', {})
+            effective_extra_lambda = float(components.get('effective_extra_lambda', 0.0))
+            positive_loss = float(components.get('positive_loss', components.get('extra', 0.0)))
+            extra_pair_count = float(components.get('extra_pair_count', components.get('extra_pairs', 0.0)))
+            active_flag = bool(effective_extra_lambda > 0 and extra_pair_count > 0)
+            logger.info(
+                "LCSR_EPOCH_AUDIT "
+                f"epoch={epoch} "
+                f"effective_extra_lambda={effective_extra_lambda:.6f} "
+                f"positive_loss={positive_loss:.6f} "
+                f"extra_pair_count={extra_pair_count:.2f} "
+                f"active_flag={int(active_flag)}"
+            )
 
             # Determine if this is the best model
             is_best = avg_loss < best_loss
@@ -397,6 +436,263 @@ def _fmt_optional_float(value):
     if value is None:
         return "nan"
     return f"{value:.6f}"
+
+
+def _resolved_filter_k(args, conf):
+    return int(args.fcrs_filter_k if args.fcrs_filter_k is not None else conf.get('num_hops', 2))
+
+
+def _collect_resolved_config(args, conf, effective_extra_loss):
+    resolved = {
+        'dataset': args.dataset,
+        'mini_batch': bool(conf.get('mini_batch', True)),
+        'gnn_type': conf.get('gnn_type', 'sage').lower(),
+        'cached': bool(conf.get('cached', True)),
+        'num_layers': int(conf.get('num_layers', 1)),
+        'fan_out': int(conf.get('fan_out', -1)),
+        'batch_size': int(conf.get('batch_size', -1)),
+        'epochs': int(conf.get('epochs', 0)),
+        'fcrs_filter_k': _resolved_filter_k(args, conf),
+        'num_hops': int(conf.get('num_hops', _resolved_filter_k(args, conf))),
+        'fcrs_extra_loss': bool(effective_extra_loss),
+        'fcrs_extra_lambda': float(args.fcrs_extra_lambda),
+        'fcrs_extra_warmup': int(args.fcrs_extra_warmup),
+        'fcrs_batch_local_admission': False,
+        'fcrs_batch_local_semantics': args.lcsr_batch_local_semantics,
+        'lcsr_support_source': args.lcsr_support_source,
+        'lcsr_positive_mode': args.lcsr_positive_mode or args.lcsr_positive_loss,
+        'lcsr_margin': float(args.lcsr_margin),
+        'lcsr_rho': float(args.lcsr_rho),
+        'lcsr_kmax': int(args.lcsr_kmax),
+        'lcsr_candidate_pool_size': int(args.lcsr_candidate_pool_size),
+        'lcsr_candidate_bank_size': int(args.lcsr_candidate_bank_size),
+        'lcsr_budget_match': bool(args.lcsr_budget_match),
+        'lcsr_use_gate': False,
+        'lcsr_release': bool(args.lcsr_release),
+        'lcsr_complete': bool(args.lcsr_complete),
+        'lcsr_weighted_complete': bool(args.lcsr_weighted_complete),
+    }
+    return resolved
+
+
+def _log_resolved_config(logger, resolved_config):
+    logger.info("RESOLVED_CONFIG_BEGIN")
+    for key, value in resolved_config.items():
+        logger.info(f"RESOLVED_CONFIG {key}={value}")
+    logger.info("RESOLVED_CONFIG_END")
+
+
+def _validate_minibatch_gcn_cached_guard(conf):
+    if (
+        bool(conf.get('mini_batch', True))
+        and str(conf.get('gnn_type', 'sage')).lower() == 'gcn'
+        and bool(conf.get('cached', True))
+    ):
+        raise ValueError(
+            "Invalid config: mini_batch=true with gnn_type=gcn requires cached=false. "
+            "NeighborLoader mini-batch GCN cannot reuse cached normalization safely."
+        )
+
+
+def _warn_if_lcsr_never_activates(logger, args, conf, effective_extra_loss):
+    if (
+        args.dataset == 'Physics'
+        and effective_extra_loss
+        and int(conf.get('epochs', 0)) == 50
+        and int(args.fcrs_extra_warmup) >= 50
+    ):
+        logger.warning("LCSR never becomes active under the current epoch budget.")
+
+
+def _summarize_pair_same_ratio(y, left, right, scores=None, q=0.2):
+    if y is None or left is None or right is None:
+        return {
+            'same_ratio': None,
+            'top20_same': None,
+            'bottom20_same': None,
+            'gap': None,
+        }
+    left = torch.as_tensor(left, dtype=torch.long)
+    right = torch.as_tensor(right, dtype=torch.long)
+    if left.numel() == 0 or right.numel() == 0:
+        return {
+            'same_ratio': None,
+            'top20_same': None,
+            'bottom20_same': None,
+            'gap': None,
+        }
+    y_cpu = y.detach().cpu()
+    valid = torch.ones(left.numel(), dtype=torch.bool)
+    if torch.is_floating_point(y_cpu):
+        valid = (~torch.isnan(y_cpu[left])) & (~torch.isnan(y_cpu[right]))
+    if int(valid.sum().item()) == 0:
+        return {
+            'same_ratio': None,
+            'top20_same': None,
+            'bottom20_same': None,
+            'gap': None,
+        }
+    same = (y_cpu[left][valid] == y_cpu[right][valid]).float()
+    result = {
+        'same_ratio': float(same.mean().item()),
+        'top20_same': None,
+        'bottom20_same': None,
+        'gap': None,
+    }
+    if scores is not None:
+        score_t = torch.as_tensor(scores, dtype=torch.float32)
+        score_t = score_t[valid]
+        if score_t.numel() > 0:
+            k = max(1, int(np.ceil(score_t.numel() * q)))
+            order = torch.argsort(score_t)
+            low = float(same[order[:k]].mean().item())
+            high = float(same[order[-k:]].mean().item())
+            result['top20_same'] = high
+            result['bottom20_same'] = low
+            result['gap'] = high - low
+    return result
+
+
+def _build_physics_label_only_diagnostic(model, data, y):
+    result = {
+        'random_nonedge_same_label_ratio': None,
+        'candidate_bank_same_label_ratio': None,
+        'post_margin_pair_same_label_ratio': None,
+        'admitted_a_plus_same_label_ratio': None,
+        'observed_edge_same_label_ratio': None,
+        'admitted_score_top20_same_label_ratio': None,
+        'admitted_score_bottom20_same_label_ratio': None,
+        'admitted_score_same_label_gap': None,
+    }
+    if y is None:
+        return result
+
+    edge_src = data.edge_index[0].detach().cpu().long()
+    edge_dst = data.edge_index[1].detach().cpu().long()
+    observed = _summarize_pair_same_ratio(y, edge_src, edge_dst)
+    result['observed_edge_same_label_ratio'] = observed['same_ratio']
+    num_nodes = int(data.x.size(0))
+    undirected_edges = set()
+    for u, v in zip(edge_src.tolist(), edge_dst.tolist()):
+        if u == v:
+            continue
+        a = int(u) if int(u) < int(v) else int(v)
+        b = int(v) if int(u) < int(v) else int(u)
+        undirected_edges.add((a, b))
+    rng = np.random.default_rng(0)
+    random_left = []
+    random_right = []
+    max_trials = 20000
+    target = min(4096, max(num_nodes // 4, 512))
+    trials = 0
+    while len(random_left) < target and trials < max_trials:
+        left = int(rng.integers(0, num_nodes))
+        right = int(rng.integers(0, num_nodes))
+        trials += 1
+        if left == right:
+            continue
+        a = left if left < right else right
+        b = right if left < right else left
+        if (a, b) in undirected_edges:
+            continue
+        random_left.append(left)
+        random_right.append(right)
+    random_diag = _summarize_pair_same_ratio(y, random_left, random_right)
+    result['random_nonedge_same_label_ratio'] = random_diag['same_ratio']
+
+    bank = getattr(model, 'fcrs_candidate_bank', None)
+    if bank is not None and bank.numel() > 0:
+        anchor = torch.arange(bank.size(0), dtype=torch.long).unsqueeze(1).expand_as(bank)
+        valid = bank >= 0
+        bank_diag = _summarize_pair_same_ratio(
+            y,
+            anchor[valid].detach().cpu(),
+            bank[valid].detach().cpu(),
+        )
+        result['candidate_bank_same_label_ratio'] = bank_diag['same_ratio']
+
+    route_rows = list(getattr(model, 'fcrs_route_audit_rows', []))
+    if route_rows:
+        margin_left = []
+        margin_right = []
+        admitted_left = []
+        admitted_right = []
+        admitted_scores = []
+        for row in route_rows:
+            margin_pairs = row.get('post_margin_global_pairs', [])
+            admitted_pairs = row.get('admitted_global_pairs', [])
+            if margin_pairs:
+                margin_left.extend([int(p[0]) for p in margin_pairs])
+                margin_right.extend([int(p[1]) for p in margin_pairs])
+            if admitted_pairs:
+                admitted_left.extend([int(p[0]) for p in admitted_pairs])
+                admitted_right.extend([int(p[1]) for p in admitted_pairs])
+            admitted_scores.extend([float(v) for v in row.get('admitted_scores', [])])
+        margin_diag = _summarize_pair_same_ratio(y, margin_left, margin_right)
+        admitted_diag = _summarize_pair_same_ratio(y, admitted_left, admitted_right, scores=admitted_scores)
+        result['post_margin_pair_same_label_ratio'] = margin_diag['same_ratio']
+        result['admitted_a_plus_same_label_ratio'] = admitted_diag['same_ratio']
+        result['admitted_score_top20_same_label_ratio'] = admitted_diag['top20_same']
+        result['admitted_score_bottom20_same_label_ratio'] = admitted_diag['bottom20_same']
+        result['admitted_score_same_label_gap'] = admitted_diag['gap']
+
+    return result
+
+
+def _write_physics_audit_reports(json_path, md_path, report):
+    json_path = Path(json_path)
+    md_path = Path(md_path)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
+
+    lines = [
+        "# Physics Audit Report",
+        "",
+        "## Resolved Config",
+        "",
+    ]
+    for key, value in report.get('resolved_config', {}).items():
+        lines.append(f"- `{key}`: {value}")
+    lines.extend([
+        "",
+        "## Route Audit",
+        "",
+    ])
+    for key, value in report.get('route_audit', {}).items():
+        if key == 'admission_audit_rows':
+            lines.append(f"- `admission_audit_rows`: {len(value)} rows")
+        else:
+            lines.append(f"- `{key}`: {value}")
+    lines.extend([
+        "",
+        "## Effective Lambda History",
+        "",
+        "| Epoch | effective_extra_lambda | positive_loss | extra_pair_count | active_flag |",
+        "| ---: | ---: | ---: | ---: | --- |",
+    ])
+    for row in report.get('effective_lambda_history', []):
+        lines.append(
+            f"| {row['epoch']} | {row['effective_extra_lambda']:.6f} | {row['positive_loss']:.6f} | "
+            f"{row['extra_pair_count']:.2f} | {int(row['active_flag'])} |"
+        )
+    lines.extend([
+        "",
+        "## Candidate Quality Diagnostic",
+        "",
+    ])
+    for key, value in report.get('candidate_quality_diagnostic', {}).items():
+        lines.append(f"- `{key}`: {value}")
+    lines.extend([
+        "",
+        "## Final Eight Metrics",
+        "",
+        "| Metric | Mean | Std |",
+        "| --- | ---: | ---: |",
+    ])
+    for metric_name, metric_info in report.get('final_metrics', {}).items():
+        lines.append(f"| {metric_name} | {metric_info['mean']:.4f} | {metric_info['std']:.4f} |")
+    md_path.write_text("\n".join(lines) + "\n", encoding='utf-8')
 
 
 def _write_lcsr_runtime_profile_report(path, args, conf, summary):
@@ -511,8 +807,8 @@ def _write_lcsr_admission_audit_reports(markdown_path, json_path, args, summary)
         "",
         "## Per-Batch Summary",
         "",
-        "| Batch | Epoch | Batch size | Subgraph nodes | Threshold type | Threshold value | Mean candidate count | Mean pass count | Mean admitted count | frac(0) | frac(1) | frac(2) | frac(k) | q50 | q90 | q99 |",
-        "| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Batch | Epoch | Batch size | Subgraph nodes | Threshold type | Threshold value | Mean candidate count | Mean pass count | Mean admitted count | zero ratio | mean dyn budget | degree source | cache hit | bank shape | score shape | frac(0) | frac(1) | frac(2) | frac(k) | q50 | q90 | q99 |",
+        "| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ])
     for row in summary["batches"]:
         cand = row["candidate_count_per_anchor"]
@@ -527,6 +823,9 @@ def _write_lcsr_admission_audit_reports(markdown_path, json_path, args, summary)
             f"| {row['batch_index']} | {row['epoch']} | {row['batch_size']} | {row['num_nodes']} | "
             f"{row['threshold_type']} | {row['threshold_value'] if row['threshold_value'] is not None else 'nan'} | "
             f"{mean_cand:.2f} | {mean_pass:.2f} | {mean_admit:.2f} | "
+            f"{row.get('zero_admission_ratio', float('nan')):.6f} | {row.get('mean_dynamic_budget', float('nan')):.6f} | "
+            f"{row.get('budget_degree_source', 'unknown')} | {int(bool(row.get('candidate_bank_cache_hit', False)))} | "
+            f"{row.get('candidate_bank_shape', '[]')} | {row.get('online_score_shape', '[]')} | "
             f"{frac.get('0', 0.0):.6f} | {frac.get('1', 0.0):.6f} | {frac.get('2', 0.0):.6f} | "
             f"{frac.get(str(k), 0.0):.6f} | {q.get('q50', float('nan')):.6f} | {q.get('q90', float('nan')):.6f} | {q.get('q99', float('nan')):.6f} |"
         )
@@ -1379,6 +1678,8 @@ def main():
                         help='Markdown output path for the LCSR batch-local admission audit report')
     parser.add_argument('--lcsr-admission-audit-json', type=str, default=None,
                         help='JSON output path for the LCSR batch-local admission audit summary')
+    parser.add_argument('--physics-audit', action='store_true',
+                        help='Run the Physics mini-batch correctness/mechanism audit and emit JSON/Markdown reports')
     args = parser.parse_args()
 
     if args.lcsr_mode is not None:
@@ -1393,6 +1694,16 @@ def main():
             elif args.lcsr_mode == 'weighted_complete':
                 args.lcsr_complete = True
                 args.lcsr_weighted_complete = True
+    if args.physics_audit:
+        args.dataset = 'Physics'
+        args.seed = 0
+        args.runs = 5
+        args.lcsr_admission_audit = True
+        args.lcsr_admission_audit_batches = min(int(args.lcsr_admission_audit_batches), 5) if args.lcsr_admission_audit_batches > 0 else 5
+        if args.lcsr_admission_audit_md is None:
+            args.lcsr_admission_audit_md = str(Path(__file__).resolve().parents[2] / "results" / "physics_admission_audit.md")
+        if args.lcsr_admission_audit_json is None:
+            args.lcsr_admission_audit_json = str(Path(__file__).resolve().parents[2] / "results" / "physics_admission_audit.json")
 
     # Setup device
     if args.device.startswith('cuda'):
@@ -1431,15 +1742,7 @@ def main():
     effective_consensus = 'mean' if args.fcrs_mode in {'lcsr', 'lcsr_v2', 'lcsr_v3'} else args.fcrs_consensus
     effective_positive_loss = args.lcsr_positive_mode or args.lcsr_positive_loss
     requested_extra_warmup = int(args.fcrs_extra_warmup)
-    effective_extra_warmup = requested_extra_warmup
-    if effective_extra_loss and requested_extra_warmup >= conf.get('epochs', 0):
-        effective_extra_warmup = max(1, conf.get('epochs', 0) // 2)
-        print(
-            f"[LCSR warning] dataset={args.dataset} requested warmup={requested_extra_warmup} "
-            f">= epochs={conf.get('epochs', 0)} so effective warmup is adjusted to {effective_extra_warmup}.",
-            flush=True,
-        )
-    args.fcrs_extra_warmup = effective_extra_warmup
+    args.fcrs_extra_warmup = requested_extra_warmup
 
     # Set to 0 for CPU to avoid multiprocessing issues
     if device.type == 'cpu':
@@ -1463,6 +1766,13 @@ def main():
     logger.info("=" * 60)
     for key, value in sorted(conf.items()):
         logger.info(f"  {key}: {value}")
+    _validate_minibatch_gcn_cached_guard(conf)
+    if effective_extra_loss and requested_extra_warmup >= conf.get('epochs', 0):
+        logger.warning(
+            f"[LCSR warning] dataset={args.dataset} requested warmup={requested_extra_warmup} "
+            f">= epochs={conf.get('epochs', 0)}; LCSR will stay inactive unless the epoch budget is increased."
+        )
+    _warn_if_lcsr_never_activates(logger, args, conf, effective_extra_loss)
 
     """Load Dataset"""
     set_seed(args.seed)
@@ -1487,6 +1797,8 @@ def main():
         and conf.get('mini_batch', True)
         and (
             args.lcsr_force_batch_local
+            or
+            args.dataset == 'Physics'
             or
             args.dataset == 'WebTopic'
             or int(x.size(0)) > large_graph_threshold
@@ -1616,13 +1928,16 @@ def main():
     model.set_logger(logger)
     degree = torch.bincount(edge_index[0].detach().cpu(), minlength=int(data.x.size(0)))
     model.set_global_degree(degree)
+    resolved_config = _collect_resolved_config(args=args, conf=conf, effective_extra_loss=effective_extra_loss)
+    resolved_config['fcrs_batch_local_admission'] = bool(getattr(model, 'fcrs_batch_local_admission', False))
+    _log_resolved_config(logger, resolved_config)
+    filter_k = _resolved_filter_k(args, conf)
     if (
         effective_extra_loss
         and conf.get('mini_batch', True)
         and getattr(model, 'fcrs_batch_local_admission', False)
         and args.lcsr_batch_local_semantics == 'candidate_bank_v2'
     ):
-        filter_k = args.fcrs_filter_k if args.fcrs_filter_k is not None else conf.get('num_hops', 2)
         candidate_bank_cache_dir = Path(__file__).resolve().parents[2] / "cache" / "lcsr_candidate_banks"
         candidate_bank, candidate_bank_meta = build_or_load_lcsr_candidate_bank(
             x=data.x,
@@ -1636,6 +1951,39 @@ def main():
             logger=logger,
         )
         model.set_batch_local_candidate_bank(candidate_bank, candidate_bank_meta)
+    if args.dataset == 'Physics' and effective_extra_loss:
+        if not conf.get('mini_batch', True):
+            raise ValueError("Physics LCSR audit requires mini_batch=true.")
+        if not getattr(model, 'fcrs_batch_local_admission', False):
+            raise ValueError("Physics LCSR route invalid: fcrs_batch_local_admission must be true.")
+        if args.lcsr_batch_local_semantics != 'candidate_bank_v2':
+            raise ValueError("Physics LCSR route invalid: only candidate_bank_v2 is allowed.")
+        if args.lcsr_complete or args.lcsr_weighted_complete or args.lcsr_release:
+            raise ValueError("Physics LCSR route invalid: release/complete/weighted_complete are not allowed.")
+        candidate_bank = getattr(model, 'fcrs_candidate_bank', None)
+        if candidate_bank is None or candidate_bank.numel() == 0:
+            raise ValueError("Physics LCSR route invalid: candidate bank is empty.")
+        if candidate_bank.dim() != 2 or int(candidate_bank.size(0)) != int(data.x.size(0)) or int(candidate_bank.size(1)) <= 0:
+            raise ValueError(
+                f"Physics LCSR route invalid: candidate bank must have shape [N,R], got {tuple(candidate_bank.shape)}."
+            )
+        model.fcrs_route_audit_meta = {
+            'route_name': 'candidate_bank_v2',
+            'bank_shape': [int(candidate_bank.size(0)), int(candidate_bank.size(1))],
+            'online_score_shape': ['B', int(candidate_bank.size(1))],
+            'cache_hit': bool(getattr(model, 'fcrs_candidate_bank_meta', {}).get('cache_hit', False)),
+            'observed_topology_unchanged': True,
+            'budget_degree_source': 'global' if getattr(model, 'fcrs_global_degree', None) is not None else 'batch_local',
+            'filter_k': int(filter_k),
+            'candidate_bank_meta': dict(getattr(model, 'fcrs_candidate_bank_meta', {})),
+        }
+        logger.info(
+            "[PHYSICS ROUTE] candidate_bank_v2 "
+            f"bank_shape={model.fcrs_route_audit_meta['bank_shape']} "
+            f"score_shape={model.fcrs_route_audit_meta['online_score_shape']} "
+            f"cache_hit={int(model.fcrs_route_audit_meta['cache_hit'])} "
+            "observed topology unchanged"
+        )
     logger.info("LCSR training path keeps the NS4GC backbone and message-passing graph unchanged.")
     logger.info(
         "FCRS_WARMUP "
@@ -2224,6 +2572,52 @@ def main():
             args=args,
             summary=admission_audit_summary,
         )
+    if args.dataset == 'Physics' and y is not None:
+        physics_label_diag = _build_physics_label_only_diagnostic(model=model, data=data, y=y)
+        logger.info(
+            "PHYSICS_LABEL_DIAG "
+            f"random_nonedge_same_label_ratio={_fmt_optional_float(physics_label_diag['random_nonedge_same_label_ratio'])} "
+            f"candidate_bank_same_label_ratio={_fmt_optional_float(physics_label_diag['candidate_bank_same_label_ratio'])} "
+            f"post_margin_pair_same_label_ratio={_fmt_optional_float(physics_label_diag['post_margin_pair_same_label_ratio'])} "
+            f"admitted_a_plus_same_label_ratio={_fmt_optional_float(physics_label_diag['admitted_a_plus_same_label_ratio'])} "
+            f"observed_edge_same_label_ratio={_fmt_optional_float(physics_label_diag['observed_edge_same_label_ratio'])} "
+            f"admitted_score_top20_same_label_ratio={_fmt_optional_float(physics_label_diag['admitted_score_top20_same_label_ratio'])} "
+            f"admitted_score_bottom20_same_label_ratio={_fmt_optional_float(physics_label_diag['admitted_score_bottom20_same_label_ratio'])} "
+            f"admitted_score_same_label_gap={_fmt_optional_float(physics_label_diag['admitted_score_same_label_gap'])}"
+        )
+        if args.physics_audit:
+            physics_report = {
+                'resolved_config': resolved_config,
+                'route_audit': {
+                    **dict(getattr(model, 'fcrs_route_audit_meta', {})),
+                    'descriptor_norm_audit': list(getattr(model, 'fcrs_descriptor_audit_rows', [])),
+                    'admission_audit_rows': list(getattr(model, 'fcrs_route_audit_rows', [])),
+                },
+                'effective_lambda_history': [
+                    {
+                        'epoch': idx + 1,
+                        'effective_extra_lambda': float(item.get('components', {}).get('effective_extra_lambda', 0.0)),
+                        'positive_loss': float(item.get('components', {}).get('positive_loss', item.get('components', {}).get('extra', 0.0))),
+                        'extra_pair_count': float(item.get('components', {}).get('extra_pair_count', item.get('components', {}).get('extra_pairs', 0.0))),
+                        'active_flag': bool(
+                            float(item.get('components', {}).get('effective_extra_lambda', 0.0)) > 0
+                            and float(item.get('components', {}).get('extra_pair_count', item.get('components', {}).get('extra_pairs', 0.0))) > 0
+                        ),
+                    }
+                    for idx, item in enumerate(epoch_stats)
+                ],
+                'candidate_quality_diagnostic': physics_label_diag,
+                'final_metrics': {
+                    name: {'mean': float(mean_results[name]), 'std': float(std_results[name])}
+                    for name in mean_results.keys()
+                },
+            }
+            physics_report_root = Path(__file__).resolve().parents[2] / "results"
+            _write_physics_audit_reports(
+                json_path=physics_report_root / "physics_audit_report.json",
+                md_path=physics_report_root / "physics_audit_report.md",
+                report=physics_report,
+            )
 
     if args.fcrs_nonedge_diag:
         filter_k = args.fcrs_filter_k if args.fcrs_filter_k is not None else conf.get('num_hops', 2)

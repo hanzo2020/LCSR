@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from time import perf_counter
 
@@ -10,6 +11,8 @@ import torch.nn.functional as F
 from torch_geometric.utils import add_remaining_self_loops, to_undirected
 
 from pyagc.utils.lcsr_consensus import map_cosine_to_unit_interval
+
+LCSR_CANDIDATE_BANK_BUILDER_VERSION = "candidate_bank_v2_meta_v1"
 
 
 def _build_normalized_adj(edge_index: torch.Tensor, num_nodes: int, dtype: torch.dtype, device: torch.device):
@@ -107,6 +110,71 @@ def _build_cache_path(
     return Path(cache_dir) / f"{safe_dataset}_src-{safe_source}_k-{filter_k}_bank-{bank_size}.pt"
 
 
+def _graph_fingerprint(edge_index: torch.Tensor, num_nodes: int) -> str:
+    edge_cpu = edge_index.detach().cpu().contiguous().long()
+    payload = edge_cpu.numpy().tobytes()
+    h = hashlib.sha1()
+    h.update(str(int(num_nodes)).encode("utf-8"))
+    h.update(payload)
+    return h.hexdigest()
+
+
+def _feature_fingerprint(x: torch.Tensor, max_values: int = 4096) -> str:
+    x_cpu = x.detach().cpu().contiguous()
+    flat = x_cpu.reshape(-1)
+    if flat.numel() == 0:
+        sample = flat
+    elif flat.numel() <= max_values:
+        sample = flat
+    else:
+        step = max(int(flat.numel() // max_values), 1)
+        sample = flat[::step][:max_values]
+    sample = sample.to(torch.float32)
+    h = hashlib.sha1()
+    h.update(str(tuple(x_cpu.shape)).encode("utf-8"))
+    h.update(str(x_cpu.dtype).encode("utf-8"))
+    h.update(sample.numpy().tobytes())
+    summary = torch.tensor(
+        [
+            float(sample.sum().item()) if sample.numel() > 0 else 0.0,
+            float(sample.mean().item()) if sample.numel() > 0 else 0.0,
+            float(sample.std(unbiased=False).item()) if sample.numel() > 0 else 0.0,
+        ],
+        dtype=torch.float32,
+    )
+    h.update(summary.numpy().tobytes())
+    return h.hexdigest()
+
+
+def _expected_meta(
+    x: torch.Tensor,
+    edge_index: torch.Tensor,
+    dataset_name: str,
+    support_source: str,
+    filter_k: int,
+    bank_size: int,
+) -> dict:
+    return {
+        "dataset": dataset_name,
+        "support_source": support_source,
+        "filter_k": int(filter_k),
+        "bank_size": int(bank_size),
+        "num_nodes": int(x.size(0)),
+        "num_edges": int(edge_index.size(1)),
+        "graph_fingerprint": _graph_fingerprint(edge_index=edge_index, num_nodes=int(x.size(0))),
+        "feature_fingerprint": _feature_fingerprint(x),
+        "builder_version": LCSR_CANDIDATE_BANK_BUILDER_VERSION,
+    }
+
+
+def _meta_matches(expected: dict, actual: dict) -> tuple[bool, list[str]]:
+    mismatches: list[str] = []
+    for key, expected_value in expected.items():
+        if actual.get(key) != expected_value:
+            mismatches.append(key)
+    return (len(mismatches) == 0), mismatches
+
+
 def build_or_load_lcsr_candidate_bank(
     x: torch.Tensor,
     edge_index: torch.Tensor,
@@ -118,6 +186,14 @@ def build_or_load_lcsr_candidate_bank(
     work_device: torch.device,
     logger=None,
 ):
+    expected_meta = _expected_meta(
+        x=x,
+        edge_index=edge_index,
+        dataset_name=dataset_name,
+        support_source=support_source,
+        filter_k=filter_k,
+        bank_size=bank_size,
+    )
     cache_path = _build_cache_path(
         cache_dir=cache_dir,
         dataset_name=dataset_name,
@@ -130,20 +206,41 @@ def build_or_load_lcsr_candidate_bank(
         payload = torch.load(cache_path, map_location="cpu")
         bank = payload["bank"].cpu().long()
         meta = dict(payload.get("meta", {}))
+        meta_valid, meta_mismatches = _meta_matches(expected_meta, meta)
+        if meta_valid and list(bank.shape) == [expected_meta["num_nodes"], int(bank_size)]:
+            meta.update(
+                {
+                    "cache_hit": True,
+                    "cache_path": str(cache_path),
+                    "cache_size_bytes": int(cache_path.stat().st_size),
+                    "bank_shape": [int(bank.size(0)), int(bank.size(1))],
+                    "cache_meta_validated": True,
+                    "cache_meta_mismatches": [],
+                }
+            )
+            if logger is not None:
+                logger.info(
+                    f"LCSR candidate bank cache hit: path={cache_path} "
+                    f"shape={tuple(bank.shape)} size_bytes={meta['cache_size_bytes']} "
+                    "meta_validated=1"
+                )
+            return bank, meta
         meta.update(
             {
-                "cache_hit": True,
+                "cache_hit": False,
                 "cache_path": str(cache_path),
                 "cache_size_bytes": int(cache_path.stat().st_size),
                 "bank_shape": [int(bank.size(0)), int(bank.size(1))],
+                "cache_meta_validated": False,
+                "cache_meta_mismatches": meta_mismatches,
             }
         )
         if logger is not None:
             logger.info(
-                f"LCSR candidate bank cache hit: path={cache_path} "
-                f"shape={tuple(bank.shape)} size_bytes={meta['cache_size_bytes']}"
+                f"LCSR candidate bank cache invalidated: path={cache_path} "
+                f"shape={tuple(bank.shape)} size_bytes={meta['cache_size_bytes']} "
+                f"mismatches={meta_mismatches}"
             )
-        return bank, meta
 
     start = perf_counter()
     adj_csr = _build_adjacency_csr(edge_index=edge_index, num_nodes=int(x.size(0)))
@@ -221,6 +318,10 @@ def build_or_load_lcsr_candidate_bank(
         "support_source": support_source,
         "filter_k": int(filter_k),
         "num_nodes": int(num_nodes),
+        "num_edges": int(edge_index.size(1)),
+        "graph_fingerprint": expected_meta["graph_fingerprint"],
+        "feature_fingerprint": expected_meta["feature_fingerprint"],
+        "builder_version": expected_meta["builder_version"],
         "mean_degree": float(degrees.mean()) if degrees.size > 0 else 0.0,
         "candidate_bank_build_s": float(build_s),
         "frontier_unique_mean": float(np.mean(frontier_unique_counts)) if frontier_unique_counts else 0.0,

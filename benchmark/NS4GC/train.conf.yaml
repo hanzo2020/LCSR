@@ -99,13 +99,77 @@ Cora:
   p_fm2: 0.2
   p_ed2: 0.3
 
+CoraFull:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 300
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 128
+  num_layers: 1
+  act: selu
+  act_last: false
+  norm: none
+  s: 0.6
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.0
+  p_ed1: 0.1
+  p_fm2: 0.1
+  p_ed2: 0.3
+  kmeans_backend: torch
+  kmeans_n_init: 100
+
+ACM:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 50
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 256
+  num_layers: 1
+  norm: none
+  s: 0.6
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.0
+  p_ed1: 0.6
+  p_fm2: 0.2
+  p_ed2: 0.6
+
+Citeseer:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 50
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 256
+  num_layers: 1
+  norm: none
+  s: 0.5
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.0
+  p_ed1: 0.6
+  p_fm2: 0.4
+  p_ed2: 0.8
+
 Photo:
   mini_batch: false
   gnn_type: gcn
   force_full_batch_inference: true
   allow_cpu_fallback: true
   epochs: 200
-  hidden_channels: 64
+  hidden_channels: 128
   num_layers: 2
   norm: none
   s: 0.6
@@ -116,6 +180,98 @@ Photo:
   p_ed1: 0.8
   p_fm2: 0.0
   p_ed2: 0.8
+
+Computers:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 400
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 256
+  num_layers: 1
+  act: selu
+  act_last: false
+  norm: none
+  s: 0.45
+  tau: 0.08
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.0
+  p_ed1: 0.15
+  p_fm2: 0.2
+  p_ed2: 0.35
+  kmeans_backend: torch
+  kmeans_n_init: 100
+
+Wiki:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 400
+  lr: 0.0005
+  wd: 0.001
+  hidden_channels: 128
+  num_layers: 1
+  act: selu
+  act_last: false
+  norm: none
+  s: 0.5
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.0
+  p_ed1: 0.6
+  p_fm2: 0.4
+  p_ed2: 0.8
+  kmeans_backend: torch
+  kmeans_n_init: 50
+
+WikiCS:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 500
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 256
+  num_layers: 1
+  act: selu
+  act_last: false
+  norm: none
+  s: 0.5
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.0
+  p_ed1: 0.2
+  p_fm2: 0.1
+  p_ed2: 0.4
+  kmeans_backend: torch
+  kmeans_n_init: 50
+
+PubMed:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 200
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 256
+  num_layers: 2
+  norm: none
+  s: 0.6
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.1
+  p_ed1: 0.2
+  p_fm2: 0.0
+  p_ed2: 0.6
 
 Physics:
   mini_batch: true
@@ -135,6 +291,30 @@ Physics:
   p_ed1: 0.8
   p_fm2: 0.
   p_ed2: 0.8
+
+CS:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 400
+  lr: 0.001
+  wd: 0.00001
+  hidden_channels: 256
+  num_layers: 1
+  act: selu
+  act_last: false
+  norm: none
+  s: 0.4
+  tau: 0.08
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.
+  p_ed1: 0.1
+  p_fm2: 0.6
+  p_ed2: 0.3
+  kmeans_backend: torch
+  kmeans_n_init: 10
 
 HM:
   mini_batch: true
