@@ -442,6 +442,12 @@ def _resolved_filter_k(args, conf):
     return int(args.fcrs_filter_k if args.fcrs_filter_k is not None else conf.get('num_hops', 2))
 
 
+def _optional_int(value):
+    if value is None:
+        return None
+    return int(value)
+
+
 def _collect_resolved_config(args, conf, effective_extra_loss):
     resolved = {
         'dataset': args.dataset,
@@ -465,7 +471,7 @@ def _collect_resolved_config(args, conf, effective_extra_loss):
         'lcsr_rho': float(args.lcsr_rho),
         'lcsr_kmax': int(args.lcsr_kmax),
         'lcsr_candidate_pool_size': int(args.lcsr_candidate_pool_size),
-        'lcsr_candidate_bank_size': int(args.lcsr_candidate_bank_size),
+        'lcsr_candidate_bank_size': _optional_int(args.lcsr_candidate_bank_size),
         'lcsr_budget_match': bool(args.lcsr_budget_match),
         'lcsr_use_gate': False,
         'lcsr_release': bool(args.lcsr_release),
@@ -637,6 +643,49 @@ def _build_physics_label_only_diagnostic(model, data, y):
         result['admitted_score_same_label_gap'] = admitted_diag['gap']
 
     return result
+
+
+def _log_lcsr_route_banner(logger, args, conf, route_name, candidate_bank_meta=None):
+    candidate_bank_meta = {} if candidate_bank_meta is None else dict(candidate_bank_meta)
+    mini_batch = bool(conf.get('mini_batch', True))
+    if route_name == "candidate_bank_v2":
+        bank_shape = candidate_bank_meta.get("bank_shape", ["N", int(args.lcsr_candidate_bank_size)])
+        score_shape = ["B", int(args.lcsr_candidate_bank_size)]
+        logger.info(
+            "LCSR_ROUTE "
+            f"dataset={args.dataset} "
+            f"mini_batch={int(mini_batch)} "
+            "route=candidate_bank_v2 "
+            f"candidate_bank_shape={bank_shape} "
+            f"online_score_shape={score_shape} "
+            f"cache_hit={int(bool(candidate_bank_meta.get('cache_hit', False)))} "
+            "legacy_topk=0 "
+            "full_batch_pair_package=0 "
+            "dense_sampled_subgraph_score=0 "
+            "observed_topology_unchanged=1"
+        )
+        return
+    if route_name == "full_batch_precomputed_pair_package":
+        logger.info(
+            "LCSR_ROUTE "
+            f"dataset={args.dataset} "
+            f"mini_batch={int(mini_batch)} "
+            "route=full_batch_precomputed_pair_package "
+            f"bounded_candidate_pool={int(args.lcsr_candidate_pool_size)} "
+            "dense_nxn=0 "
+            "candidate_bank_shape=None "
+            "online_score_shape=None "
+            "cache_hit=0 "
+            "legacy_topk=0 "
+            "observed_topology_unchanged=1"
+        )
+        return
+    logger.info(
+        "LCSR_ROUTE "
+        f"dataset={args.dataset} "
+        f"mini_batch={int(mini_batch)} "
+        f"route={route_name}"
+    )
 
 
 def _write_physics_audit_reports(json_path, md_path, report):
@@ -1502,7 +1551,7 @@ def main():
     parser.add_argument('--root', type=str, default='../data',
                         help='Root path of dataset')
     parser.add_argument('--dataset', type=str, default='Cora',
-                        choices=['Cora', 'Photo', 'Physics', 'HM', 'Flickr',
+                        choices=['Cora', 'Citeseer', 'PubMed', 'CoraFull', 'Photo', 'Computers', 'CS', 'Physics', 'HM', 'Flickr',
                                  'ArXiv', 'Reddit', 'MAG', 'Pokec', 'Products', 'WebTopic', 'Papers100M'],
                         help='Dataset name')
     parser.add_argument('--gnn_type', type=str, default=None,
@@ -1932,6 +1981,12 @@ def main():
     resolved_config['fcrs_batch_local_admission'] = bool(getattr(model, 'fcrs_batch_local_admission', False))
     _log_resolved_config(logger, resolved_config)
     filter_k = _resolved_filter_k(args, conf)
+    route_name = _resolve_csv_path_name(
+        args=args,
+        conf=conf,
+        effective_extra_loss=effective_extra_loss,
+        use_lcsr_large_batch_lite=use_lcsr_large_batch_lite,
+    )
     if (
         effective_extra_loss
         and conf.get('mini_batch', True)
@@ -1951,6 +2006,21 @@ def main():
             logger=logger,
         )
         model.set_batch_local_candidate_bank(candidate_bank, candidate_bank_meta)
+        _log_lcsr_route_banner(
+            logger=logger,
+            args=args,
+            conf=conf,
+            route_name=route_name,
+            candidate_bank_meta=candidate_bank_meta,
+        )
+    elif effective_extra_loss:
+        _log_lcsr_route_banner(
+            logger=logger,
+            args=args,
+            conf=conf,
+            route_name=route_name,
+            candidate_bank_meta=None,
+        )
     if args.dataset == 'Physics' and effective_extra_loss:
         if not conf.get('mini_batch', True):
             raise ValueError("Physics LCSR audit requires mini_batch=true.")
