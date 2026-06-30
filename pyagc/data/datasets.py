@@ -1,18 +1,87 @@
-import torch
 import os
+from pathlib import Path
+
+import torch
 import torch_geometric.transforms as T
 from ogb.nodeproppred import PygNodePropPredDataset
 from torch_geometric.data import Data
 from torch_geometric.datasets import Planetoid, CoraFull, Amazon, Coauthor, Flickr, Reddit2, WikiCS
-from torch_geometric.utils import to_undirected, add_remaining_self_loops, subgraph
+from torch_geometric.utils import to_undirected, add_remaining_self_loops, subgraph, from_scipy_sparse_matrix
 import psutil
 
 from pyagc.data.graphland import GraphLandDataset
+
+try:
+    import numpy as np
+    from scipy import sparse as sp
+    from scipy.io import loadmat
+except ImportError:
+    np = None
+    sp = None
+    loadmat = None
+
+
+MAT_BENCHMARK_DATASETS = {
+    'acm': 'acm',
+}
 
 
 def get_available_ram_gb():
     """Get available RAM in GB."""
     return psutil.virtual_memory().total / (1024 ** 3)
+
+
+def _load_mat_benchmark_dataset(alias: str, root: str) -> Data:
+    """Load a benchmark .mat dataset stored with W / fea / gnd fields."""
+    if loadmat is None or np is None or sp is None:
+        raise ImportError(
+            "Loading .mat benchmark datasets requires scipy and numpy. "
+            "Please install them in the current environment."
+        )
+
+    mat_name = MAT_BENCHMARK_DATASETS[alias]
+    root_path = Path(root)
+    candidates = [
+        root_path / f'{mat_name}.mat',
+        root_path / mat_name / f'{mat_name}.mat',
+        root_path / alias / f'{mat_name}.mat',
+    ]
+
+    mat_path = next((path for path in candidates if path.exists()), None)
+    if mat_path is None:
+        raise FileNotFoundError(
+            f"Could not find {mat_name}.mat under {root}. "
+            f"Tried: {', '.join(str(path) for path in candidates)}"
+        )
+
+    mat = loadmat(mat_path)
+    if not all(key in mat for key in ('W', 'fea', 'gnd')):
+        raise KeyError(
+            f"{mat_path} must contain keys 'W', 'fea', and 'gnd'. "
+            f"Found: {[key for key in mat.keys() if not key.startswith('__')]}"
+        )
+
+    features = mat['fea']
+    adjacency = mat['W']
+    labels = np.asarray(mat['gnd']).reshape(-1)
+
+    if sp.issparse(features):
+        features = features.toarray()
+    else:
+        features = np.asarray(features)
+
+    if sp.issparse(adjacency):
+        edge_index, _ = from_scipy_sparse_matrix(adjacency.tocoo())
+    else:
+        adjacency = np.asarray(adjacency)
+        edge_index = torch.from_numpy(np.vstack(np.nonzero(adjacency))).long()
+
+    x = torch.from_numpy(np.asarray(features, dtype=np.float32))
+    y = torch.from_numpy(labels.astype(np.int64))
+    y = y - y.min()
+
+    data = Data(x=x, edge_index=edge_index, y=y)
+    return T.NormalizeFeatures()(data)
 
 
 def get_dataset(name: str, root: str, return_splits=False):
@@ -35,6 +104,7 @@ def get_dataset(name: str, root: str, return_splits=False):
             'wiki_cs', 'ogbn-arxiv', 'arxiv', 'ogbn-mag', 'mag',
             'ogbn-products', 'products', 'ogbn-papers100M', 'papers100m',
             'hm-categories', 'hm', 'pokec-regions', 'pokec',
+            'acm',
             'web-topics', 'webtopic'].
         root (str): The root directory where the dataset should be stored.
         return_splits (bool, optional): If True, also returns train/valid/test
@@ -63,6 +133,17 @@ def get_dataset(name: str, root: str, return_splits=False):
     # Special handling for papers100M dataset
     if name in ['ogbn-papers100M', 'papers100m']:
         return _load_papers100m(root, return_splits)
+
+    if name in MAT_BENCHMARK_DATASETS:
+        if return_splits:
+            raise ValueError(
+                f"Dataset '{name}' is loaded from a local .mat file and does not provide predefined splits. "
+                "Please call get_dataset(..., return_splits=False)."
+            )
+        data = _load_mat_benchmark_dataset(name, root)
+        data.edge_index = to_undirected(data.edge_index)
+        data.y = data.y.squeeze()
+        return data.x, data.edge_index, data.y
 
     if name in ['cora', 'citeseer', 'pubmed']:
         dataset = Planetoid(root=root, name=name, transform=T.NormalizeFeatures())

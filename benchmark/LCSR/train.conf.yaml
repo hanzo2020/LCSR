@@ -99,6 +99,43 @@ Cora:
   lcsr_plus_weight_mode: uniform
 # Frozen from search top1 trial citeseer_226
 # dataset=Citeseer|seed=0|runs=5|mini_batch=false|src=freq|mode=linear|q=None|lambda=0.005|warmup=40|margin=0.10|rho=0.20|kmax=4|pool=16|bank=None|gnn=gcn|hidden=256|layers=1|epochs=50|p_fm1=0.40|p_ed1=0.50|p_fm2=0.10|p_ed2=0.80|path=full_batch_precomputed_pair_package
+ACM:
+  mini_batch: false
+  gnn_type: gcn
+  force_full_batch_inference: true
+  allow_cpu_fallback: true
+  epochs: 50
+  lr: 0.001
+  wd: 1.0e-05
+  hidden_channels: 128
+  num_layers: 1
+  norm: none
+  s: 0.6
+  tau: 0.1
+  lam: 1.0
+  gam: 1.0
+  p_fm1: 0.1
+  p_ed1: 0.4
+  p_fm2: 0.2
+  p_ed2: 0.4
+  num_hops: 2
+  fcrs_extra_lambda: 0.005
+  fcrs_extra_warmup: 10
+  lcsr_support_source: freq
+  lcsr_positive_mode: linear
+  lcsr_positive_quantile: null
+  lcsr_positive_margin: null
+  lcsr_margin: 0.00
+  lcsr_rho: 0.25
+  lcsr_kmax: 3
+  lcsr_candidate_pool_size: 32
+  lcsr_use_gate: false
+  lcsr_force_batch_local: false
+  lcsr_v3_variant: degree_shrink
+  lcsr_add_score: global
+  lcsr_budget_match: true
+  lcsr_reliability_mode: full
+  lcsr_plus_weight_mode: uniform
 Citeseer:
   mini_batch: false
   gnn_type: gcn
@@ -144,7 +181,7 @@ Computers:
   gnn_type: gcn
   force_full_batch_inference: true
   allow_cpu_fallback: true
-  epochs: 400
+  epochs: 300
   lr: 0.001
   wd: 1.0e-05
   hidden_channels: 256
@@ -158,22 +195,22 @@ Computers:
   gam: 1.0
   p_fm1: 0.0
   p_ed1: 0.35
-  p_fm2: 0.1
-  p_ed2: 0.15
+  p_fm2: 0.0
+  p_ed2: 0.35
   num_hops: 2
-  # Frozen from current search top1 trial computers_032
-  # lambda=0.002 warmup=40 rho=0.25 kmax=4 pool=16 quantile=0.10 margin=0.10 gnn_type=gcn hidden_channels=256 num_layers=1 epochs=400 p_fm1=0.0 p_ed1=0.35 p_fm2=0.1 p_ed2=0.15
-  fcrs_extra_lambda: 0.002
-  fcrs_extra_warmup: 40
+  # Frozen from search top1 trial computers_062
+  # lambda=0.003 warmup=25 rho=0.10 kmax=3 pool=12 quantile=0.15 margin=0.15 gnn_type=gcn hidden_channels=256 num_layers=1 epochs=300 p_fm1=0.0 p_ed1=0.35 p_fm2=0.0 p_ed2=0.35
+  fcrs_extra_lambda: 0.003
+  fcrs_extra_warmup: 25
   fcrs_extra_k: 1
   lcsr_support_source: mu
   lcsr_positive_mode: quantile_hinge
-  lcsr_positive_quantile: 0.10
+  lcsr_positive_quantile: 0.15
   lcsr_positive_margin: null
-  lcsr_margin: 0.10
-  lcsr_rho: 0.25
-  lcsr_kmax: 4
-  lcsr_candidate_pool_size: 16
+  lcsr_margin: 0.15
+  lcsr_rho: 0.10
+  lcsr_kmax: 3
+  lcsr_candidate_pool_size: 12
   lcsr_candidate_bank_size: null
   lcsr_use_gate: false
   lcsr_force_batch_local: false
@@ -188,7 +225,7 @@ PubMed:
   gnn_type: gcn
   force_full_batch_inference: true
   allow_cpu_fallback: true
-  epochs: 200
+  epochs: 300
   lr: 0.001
   wd: 1.0e-05
   hidden_channels: 256
@@ -198,22 +235,24 @@ PubMed:
   tau: 0.1
   lam: 1.0
   gam: 1.0
-  p_fm1: 0.1
-  p_ed1: 0.2
-  p_fm2: 0.0
+  p_fm1: 0.2
+  p_ed1: 0.6
+  p_fm2: 0.2
   p_ed2: 0.6
   num_hops: 2
-  fcrs_extra_lambda: 0.005
-  fcrs_extra_warmup: 25
+  # Frozen from search top1 trial pubmed_110
+  # lambda=0.01 warmup=10 rho=0.20 kmax=4 pool=24 margin=0.05 gnn_type=gcn hidden_channels=256 num_layers=2 epochs=300 p_fm1=0.2 p_ed1=0.6 p_fm2=0.2 p_ed2=0.6
+  fcrs_extra_lambda: 0.01
+  fcrs_extra_warmup: 10
   fcrs_extra_k: 1
   lcsr_support_source: freq
   lcsr_positive_mode: linear
   lcsr_positive_quantile: null
   lcsr_positive_margin: null
-  lcsr_margin: 0.10
-  lcsr_rho: 0.15
-  lcsr_kmax: 2
-  lcsr_candidate_pool_size: 32
+  lcsr_margin: 0.05
+  lcsr_rho: 0.20
+  lcsr_kmax: 4
+  lcsr_candidate_pool_size: 24
   lcsr_candidate_bank_size: null
   lcsr_use_gate: false
   lcsr_force_batch_local: false
@@ -367,17 +406,19 @@ Physics:
   p_ed1: 0.8
   p_fm2: 0.0
   p_ed2: 0.8
-  fcrs_extra_lambda: 0.005
-  fcrs_extra_warmup: 10
+  # Frozen from search top1 trial physics_005
+  # lambda=0.008 warmup=5 rho=0.15 kmax=2 pool=24 margin=0.05 gnn_type=gcn hidden_channels=64 num_layers=2 epochs=50 p_fm1=0.0 p_ed1=0.8 p_fm2=0.0 p_ed2=0.8 support_source=freq positive_mode=linear
+  fcrs_extra_lambda: 0.008
+  fcrs_extra_warmup: 5
   fcrs_extra_k: 1
   lcsr_support_source: freq
   lcsr_positive_mode: linear
   lcsr_positive_quantile: null
   lcsr_positive_margin: null
-  lcsr_margin: 0.10
+  lcsr_margin: 0.05
   lcsr_rho: 0.15
   lcsr_kmax: 2
-  lcsr_candidate_pool_size: 16
+  lcsr_candidate_pool_size: 24
   lcsr_force_batch_local: true
   lcsr_batch_local_semantics: candidate_bank_v2
   lcsr_candidate_bank_size: 32
@@ -394,6 +435,9 @@ HM:
   epochs: 200
   hidden_channels: 128
   num_layers: 2
+  batch_size: 16384
+  infer_batch_size: 256
+  infer_fan_out: -1
   norm: null
   s: 0.8
   tau: 0.1
@@ -403,6 +447,26 @@ HM:
   p_ed1: 0.6
   p_fm2: 0.0
   p_ed2: 0.6
+  num_hops: 2
+  # HM frozen search best was hm_011. Note that the original search logs
+  # recorded margin=0.00, but the resolved config stayed at 0.10 because the
+  # CLI override matched the parser default and therefore did not replace the
+  # dataset config during merge. The values below reflect the actual effective
+  # settings used for the fixed HM route.
+  fcrs_extra_lambda: 0.008
+  fcrs_extra_warmup: 10
+  fcrs_extra_k: 2
+  lcsr_support_source: freq
+  lcsr_positive_mode: linear
+  lcsr_margin: 0.10
+  lcsr_rho: 0.10
+  lcsr_kmax: 2
+  lcsr_candidate_pool_size: 16
+  lcsr_candidate_bank_size: 48
+  lcsr_force_batch_local: true
+  lcsr_batch_local_semantics: candidate_bank_v2
+  lcsr_use_gate: false
+  lcsr_budget_match: true
 Flickr:
   mini_batch: true
   gnn_type: gcn
@@ -447,22 +511,22 @@ ArXiv:
   p_ed1: 0.4
   p_fm2: 0.0
   p_ed2: 0.4
-  # LCSR frozen ArXiv V2 route:
+  # LCSR frozen ArXiv search best (arxiv_034):
   # - fcrs_extra_k: max extra positive pairs used by the latent positive loss path.
   # - lcsr_kmax: per-anchor dynamic rectification budget after margin / rho filtering.
   # - candidate-bank frontier / hop expansion is an internal retrieval setting
   #   (current batch-local bank build uses filter_k=4) and is not the same as either k above.
   fcrs_extra_lambda: 0.005
-  fcrs_extra_warmup: 50
-  fcrs_extra_k: 2
+  fcrs_extra_warmup: 25
+  fcrs_extra_k: 1
   lcsr_support_source: freq
   lcsr_positive_mode: linear
   lcsr_positive_quantile: null
   lcsr_positive_margin: null
   lcsr_margin: 0.15
-  lcsr_rho: 0.2
-  lcsr_kmax: 3
-  lcsr_candidate_pool_size: 32
+  lcsr_rho: 0.25
+  lcsr_kmax: 4
+  lcsr_candidate_pool_size: 48
   lcsr_use_gate: false
   lcsr_force_batch_local: true
   lcsr_batch_local_semantics: candidate_bank_v2
@@ -495,10 +559,11 @@ Reddit:
 MAG:
   mini_batch: true
   gnn_type: gcn
+  cached: false
   epochs: 50
   hidden_channels: 256
   num_layers: 3
-  num_hops: 4
+  num_hops: 2
   batch_size: 16384
   infer_batch_size: 256
   infer_fan_out: -1
@@ -514,20 +579,20 @@ MAG:
   p_fm2: 0.0
   p_ed2: 0.4
   fcrs_extra_lambda: 0.005
-  fcrs_extra_warmup: 50
-  fcrs_extra_k: 2
+  fcrs_extra_warmup: 10
+  fcrs_extra_k: 1
   lcsr_support_source: freq
   lcsr_positive_mode: linear
   lcsr_positive_quantile: null
   lcsr_positive_margin: null
-  lcsr_margin: 0.15
-  lcsr_rho: 0.2
-  lcsr_kmax: 3
-  lcsr_candidate_pool_size: 32
+  lcsr_margin: 0.10
+  lcsr_rho: 0.15
+  lcsr_kmax: 2
+  lcsr_candidate_pool_size: 16
   lcsr_use_gate: false
   lcsr_force_batch_local: true
   lcsr_batch_local_semantics: candidate_bank_v2
-  lcsr_candidate_bank_size: 64
+  lcsr_candidate_bank_size: 32
   lcsr_v3_variant: degree_shrink
   lcsr_add_score: global
   lcsr_budget_match: true
@@ -537,6 +602,7 @@ MAG:
 Pokec:
   mini_batch: true
   gnn_type: gcn
+  cached: false
   epochs: 20
   hidden_channels: 256
   num_layers: 3
@@ -585,6 +651,7 @@ WebTopic:
   epochs: 10
   hidden_channels: 256
   num_layers: 2
+  num_hops: 2
   batch_size: 16384
   infer_batch_size: 65536
   infer_fan_out: 10
@@ -599,6 +666,26 @@ WebTopic:
   p_ed1: 0.1
   p_fm2: 0.1
   p_ed2: 0.1
+  fcrs_extra_lambda: 0.005
+  fcrs_extra_warmup: 5
+  fcrs_extra_k: 1
+  lcsr_support_source: freq
+  lcsr_positive_mode: linear
+  lcsr_positive_quantile: null
+  lcsr_positive_margin: null
+  lcsr_margin: 0.10
+  lcsr_rho: 0.15
+  lcsr_kmax: 2
+  lcsr_candidate_pool_size: 16
+  lcsr_candidate_bank_size: 32
+  lcsr_use_gate: false
+  lcsr_force_batch_local: true
+  lcsr_batch_local_semantics: candidate_bank_v2
+  lcsr_v3_variant: degree_shrink
+  lcsr_add_score: global
+  lcsr_budget_match: true
+  lcsr_reliability_mode: full
+  lcsr_plus_weight_mode: uniform
   kmeans_n_init: 10
   kmeans_max_iter: 300
 Papers100M:

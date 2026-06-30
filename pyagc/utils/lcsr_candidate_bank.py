@@ -12,7 +12,7 @@ from torch_geometric.utils import add_remaining_self_loops, to_undirected
 
 from pyagc.utils.lcsr_consensus import map_cosine_to_unit_interval
 
-LCSR_CANDIDATE_BANK_BUILDER_VERSION = "candidate_bank_v2_meta_v1"
+LCSR_CANDIDATE_BANK_BUILDER_VERSION = "candidate_bank_v2_meta_v2"
 
 
 def _build_normalized_adj(edge_index: torch.Tensor, num_nodes: int, dtype: torch.dtype, device: torch.device):
@@ -74,6 +74,11 @@ def _prepare_representations(
         "high": F.normalize(x_work - x1, p=2, dim=-1).cpu(),
     }
     return reps
+
+
+def _is_torch_oom(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "out of memory" in text or "cuda out of memory" in text
 
 
 def _pair_scores_from_source(
@@ -244,12 +249,32 @@ def build_or_load_lcsr_candidate_bank(
 
     start = perf_counter()
     adj_csr = _build_adjacency_csr(edge_index=edge_index, num_nodes=int(x.size(0)))
-    reps = _prepare_representations(
-        x=x,
-        edge_index=edge_index,
-        filter_k=filter_k,
-        work_device=work_device,
-    )
+    rep_device = work_device
+    try:
+        reps = _prepare_representations(
+            x=x,
+            edge_index=edge_index,
+            filter_k=filter_k,
+            work_device=rep_device,
+        )
+    except RuntimeError as exc:
+        if rep_device.type != "cpu" and _is_torch_oom(exc):
+            if logger is not None:
+                logger.warning(
+                    "LCSR candidate bank build hit OOM on %s; retrying representation prep on CPU.",
+                    rep_device,
+                )
+            if rep_device.type == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            rep_device = torch.device("cpu")
+            reps = _prepare_representations(
+                x=x,
+                edge_index=edge_index,
+                filter_k=filter_k,
+                work_device=rep_device,
+            )
+        else:
+            raise
     num_nodes = int(x.size(0))
     bank = torch.full((num_nodes, int(bank_size)), -1, dtype=torch.long)
     degrees = np.diff(adj_csr.indptr).astype(np.int64, copy=False)
@@ -322,6 +347,7 @@ def build_or_load_lcsr_candidate_bank(
         "graph_fingerprint": expected_meta["graph_fingerprint"],
         "feature_fingerprint": expected_meta["feature_fingerprint"],
         "builder_version": expected_meta["builder_version"],
+        "representation_device": str(rep_device),
         "mean_degree": float(degrees.mean()) if degrees.size > 0 else 0.0,
         "candidate_bank_build_s": float(build_s),
         "frontier_unique_mean": float(np.mean(frontier_unique_counts)) if frontier_unique_counts else 0.0,

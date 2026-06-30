@@ -15,37 +15,38 @@ DRY_RUN="${DRY_RUN:-0}"
 DATASET="ArXiv"
 TRIALS="${TRIALS:-50}"
 KEEP_TOP_K="${KEEP_TOP_K:-3}"
-RETAIN_METRIC="${RETAIN_METRIC:-ARI}"
+RETAIN_METRIC="${RETAIN_METRIC:-MEAN4}"
 PYTHON_BIN="${PYTHON:-$(command -v python)}"
 
 mkdir -p "$ABS_OUT_DIR/logs" "$CKPT_ROOT"
 
 RANDOM="$SEARCH_SEED"
 
-LAMBDAS=(0.002 0.005 0.008 0.01)
-WARMUPS=(25 50 75)
-RHOS=(0.15 0.20 0.25 0.30)
-KMAXS=(2 3 4 5)
-POOLS=(16 24 32 48 64)
-MARGINS=(0.00 0.05 0.10 0.15 0.20)
-BANK_SIZES=(32 48 64 80 96 128)
-GNN_TYPES=(gcn sage)
-HIDDEN_CHANNELS=(128 256 512)
-NUM_LAYERS=(1 2 3)
-EPOCHS=(150 200 250)
-P_FMS=(0.0 0.1 0.2)
-P_EDS=(0.1 0.2 0.4 0.6)
+LAMBDAS=(0.002 0.005 0.008)
+WARMUPS=(10 25 50)
+RHOS=(0.15 0.20 0.25)
+KMAXS=(2 3 4)
+POOLS=(16 24 48)
+MARGINS=(0.00 0.05 0.15)
+BANK_SIZES=(64 96)
+EXTRA_KS=(1 2)
 
-REQUIRED_BACKBONE_ARGS=(
-  "--gnn_type"
-  "--hidden_channels"
-  "--num_layers"
-  "--epochs"
-  "--p_fm1"
-  "--p_ed1"
-  "--p_fm2"
-  "--p_ed2"
-)
+FIXED_GNN_TYPE="sage"
+FIXED_HIDDEN_CHANNELS="256"
+FIXED_NUM_LAYERS="3"
+FIXED_EPOCHS="200"
+FIXED_P_FM1="0.0"
+FIXED_P_ED1="0.4"
+FIXED_P_FM2="0.0"
+FIXED_P_ED2="0.4"
+
+check_cli_support() {
+  local help_output
+  help_output="$(run_main --model LCSR --dataset "$DATASET" -- --help 2>&1)" || true
+  if [[ "$help_output" != *"--lcsr-candidate-bank-size"* ]]; then
+    echo "[LCSR SEARCH] WARNING: wrapper help output does not expose downstream LCSR args; continuing with direct benchmark invocation." >&2
+  fi
+}
 
 pick_from() {
   local -n arr_ref="$1"
@@ -60,23 +61,6 @@ run_main() {
   )
 }
 
-check_cli_support() {
-  local help_output
-  help_output="$(run_main --model LCSR --dataset "$DATASET" -- --help 2>&1)" || true
-  local missing=()
-  local arg
-  for arg in "${REQUIRED_BACKBONE_ARGS[@]}"; do
-    if [[ "$help_output" != *"$arg"* ]]; then
-      missing+=("$arg")
-    fi
-  done
-  if (( ${#missing[@]} > 0 )); then
-    echo "[LCSR SEARCH] ERROR: benchmark/LCSR/main.py on this machine does not support the new backbone search args: ${missing[*]}" >&2
-    echo "[LCSR SEARCH] Sync the updated benchmark/LCSR/main.py before running this search." >&2
-    exit 2
-  fi
-}
-
 check_cli_support
 
 build_command() {
@@ -87,15 +71,8 @@ build_command() {
   local pool="$5"
   local margin="$6"
   local bank_size="$7"
-  local gnn_type="$8"
-  local hidden_channels="$9"
-  local num_layers="${10}"
-  local epochs="${11}"
-  local p_fm1="${12}"
-  local p_ed1="${13}"
-  local p_fm2="${14}"
-  local p_ed2="${15}"
-  local trial_ckpt_dir="${16}"
+  local extra_k="$8"
+  local trial_ckpt_dir="$9"
   local -a cmd=(
     "PYTHONPATH=$PROJECT_ROOT"
     "$PYTHON_BIN" "main.py"
@@ -111,17 +88,18 @@ build_command() {
     --lcsr-positive-mode linear
     --fcrs-extra-lambda "$lambda"
     --fcrs-extra-warmup "$warmup"
+    --fcrs-extra-k "$extra_k"
     --lcsr-rho "$rho"
     --lcsr-kmax "$kmax"
     --lcsr-candidate-pool-size "$pool"
-    --gnn_type "$gnn_type"
-    --hidden_channels "$hidden_channels"
-    --num_layers "$num_layers"
-    --epochs "$epochs"
-    --p_fm1 "$p_fm1"
-    --p_ed1 "$p_ed1"
-    --p_fm2 "$p_fm2"
-    --p_ed2 "$p_ed2"
+    --gnn_type "$FIXED_GNN_TYPE"
+    --hidden_channels "$FIXED_HIDDEN_CHANNELS"
+    --num_layers "$FIXED_NUM_LAYERS"
+    --epochs "$FIXED_EPOCHS"
+    --p_fm1 "$FIXED_P_FM1"
+    --p_ed1 "$FIXED_P_ED1"
+    --p_fm2 "$FIXED_P_FM2"
+    --p_ed2 "$FIXED_P_ED2"
     --lcsr-margin "$margin"
     --lcsr-candidate-bank-size "$bank_size"
     --lcsr-batch-local-semantics candidate_bank_v2
@@ -234,6 +212,7 @@ update_topk_retention() {
 
 dry_run_printed=0
 failed=0
+declare -A seen_configs=()
 
 for trial in $(seq 1 "$TRIALS"); do
   trial_name=$(printf "arxiv_%03d" "$trial")
@@ -243,20 +222,13 @@ for trial in $(seq 1 "$TRIALS"); do
 
   if [[ "$trial" -eq 1 ]]; then
     lambda=0.005
-    warmup=50
-    rho=0.20
-    kmax=3
-    pool=32
+    warmup=25
+    rho=0.25
+    kmax=4
+    pool=48
     margin=0.15
     bank_size=64
-    gnn_type=sage
-    hidden_channels=256
-    num_layers=3
-    epochs=200
-    p_fm1=0.0
-    p_ed1=0.4
-    p_fm2=0.0
-    p_ed2=0.4
+    extra_k=1
   else
     while true; do
       lambda="$(pick_from LAMBDAS)"
@@ -266,22 +238,21 @@ for trial in $(seq 1 "$TRIALS"); do
       pool="$(pick_from POOLS)"
       margin="$(pick_from MARGINS)"
       bank_size="$(pick_from BANK_SIZES)"
-      gnn_type="$(pick_from GNN_TYPES)"
-      hidden_channels="$(pick_from HIDDEN_CHANNELS)"
-      num_layers="$(pick_from NUM_LAYERS)"
-      epochs="$(pick_from EPOCHS)"
-      p_fm1="$(pick_from P_FMS)"
-      p_ed1="$(pick_from P_EDS)"
-      p_fm2="$(pick_from P_FMS)"
-      p_ed2="$(pick_from P_EDS)"
-      if (( pool >= kmax && bank_size >= pool )); then
+      extra_k="$(pick_from EXTRA_KS)"
+      config_key="lambda=$lambda|warmup=$warmup|rho=$rho|kmax=$kmax|pool=$pool|margin=$margin|bank_size=$bank_size|extra_k=$extra_k"
+      if (( pool >= kmax && bank_size >= pool )) && [[ -z "${seen_configs[$config_key]:-}" ]]; then
+        seen_configs["$config_key"]=1
         break
       fi
     done
   fi
+  if [[ "$trial" -eq 1 ]]; then
+    config_key="lambda=$lambda|warmup=$warmup|rho=$rho|kmax=$kmax|pool=$pool|margin=$margin|bank_size=$bank_size|extra_k=$extra_k"
+    seen_configs["$config_key"]=1
+  fi
 
-  param_desc="lambda=$lambda warmup=$warmup rho=$rho kmax=$kmax pool=$pool margin=$margin bank_size=$bank_size gnn_type=$gnn_type hidden_channels=$hidden_channels num_layers=$num_layers epochs=$epochs p_fm1=$p_fm1 p_ed1=$p_ed1 p_fm2=$p_fm2 p_ed2=$p_ed2 batch_local_semantics=candidate_bank_v2 force_batch_local=true"
-  cmd_str="$(build_command "$lambda" "$warmup" "$rho" "$kmax" "$pool" "$margin" "$bank_size" "$gnn_type" "$hidden_channels" "$num_layers" "$epochs" "$p_fm1" "$p_ed1" "$p_fm2" "$p_ed2" "$trial_ckpt_dir")"
+  param_desc="lambda=$lambda warmup=$warmup extra_k=$extra_k rho=$rho kmax=$kmax pool=$pool margin=$margin bank_size=$bank_size gnn_type=$FIXED_GNN_TYPE hidden_channels=$FIXED_HIDDEN_CHANNELS num_layers=$FIXED_NUM_LAYERS epochs=$FIXED_EPOCHS p_fm1=$FIXED_P_FM1 p_ed1=$FIXED_P_ED1 p_fm2=$FIXED_P_FM2 p_ed2=$FIXED_P_ED2 batch_local_semantics=candidate_bank_v2 force_batch_local=true"
+  cmd_str="$(build_command "$lambda" "$warmup" "$rho" "$kmax" "$pool" "$margin" "$bank_size" "$extra_k" "$trial_ckpt_dir")"
 
   if [[ "$DRY_RUN" == "1" ]]; then
     if (( dry_run_printed < 5 )); then

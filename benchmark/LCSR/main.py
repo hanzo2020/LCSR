@@ -1552,8 +1552,8 @@ def main():
                         help='Root path of dataset')
     parser.add_argument('--dataset', type=str, default='Cora',
                         choices=['Cora', 'Citeseer', 'PubMed', 'CoraFull', 'Photo', 'Computers', 'CS', 'Physics', 'HM', 'Flickr',
-                                 'ArXiv', 'Reddit', 'MAG', 'Pokec', 'Products', 'WebTopic', 'Papers100M'],
-                        help='Dataset name')
+                                 'ArXiv', 'Reddit', 'MAG', 'Pokec', 'Products', 'WebTopic', 'Papers100M', 'ACM'],
+                         help='Dataset name')
     parser.add_argument('--gnn_type', type=str, default=None,
                         choices=['gcn', 'sage', 'graphsage', 'gat', 'gatv2', 'gin', 'pna', 'edgecnn'],
                         help='Optional override for the encoder backbone type')
